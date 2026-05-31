@@ -5,8 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../theme/app_theme.dart';
 import '../../providers/language_provider.dart';
 import '../../utils/navigation_helper.dart';
-import '../../services/auth_service.dart';
 import '../../services/users_service.dart';
+import '../../models/user.dart';
 
 class PersonalInfoPage extends StatefulWidget {
   const PersonalInfoPage({super.key});
@@ -18,14 +18,15 @@ class PersonalInfoPage extends StatefulWidget {
 class _PersonalInfoPageState extends State<PersonalInfoPage> {
   bool _isEditing = false;
   final UsersService _usersService = UsersService();
+  User? _currentUser;
 
   // ── Basic Details ────────────────────────────────────────────────────────
-  final _fullNameCtrl = TextEditingController(text: "Admin User");
+  final _fullNameCtrl = TextEditingController();
   static const _profileDisplayNameKey = 'profile_display_name';
-  final _nationalIdCtrl = TextEditingController(text: "Session account");
+  final _nationalIdCtrl = TextEditingController();
   final _dobCtrl = TextEditingController(text: "");
   final _phoneCtrl = TextEditingController(text: "");
-  final _emailCtrl = TextEditingController(text: "admin@smf.com");
+  final _emailCtrl = TextEditingController();
   String _selectedGender = "Prefer not to say";
   final List<String> _genders = ["Male", "Female", "Prefer not to say"];
 
@@ -42,25 +43,27 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
       _fullNameCtrl.text = savedName;
     }
 
-    final userId = AuthService.instance.userId;
-    if (userId == null || userId.isEmpty) return;
-
     try {
-      final user = await _usersService.getUser(userId);
+      final user = await _usersService.getCurrentUser();
       if (!mounted) return;
       setState(() {
+        _currentUser = user;
         if (savedName == null || savedName.isEmpty) {
-          _fullNameCtrl.text =
-              user.name.trim().isEmpty ? 'Admin User' : user.name;
+          _fullNameCtrl.text = user.name.trim();
         }
-        _emailCtrl.text =
-            user.email.trim().isEmpty ? 'admin@smf.com' : user.email;
+        _emailCtrl.text = user.email.trim();
         _phoneCtrl.text = user.phone ?? '';
         _nationalIdCtrl.text = user.id.trim().isEmpty
             ? context.read<LanguageProvider>().getText('sessionAccount')
             : context.read<LanguageProvider>().getText('accountLinked');
       });
-    } catch (_) {}
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _nationalIdCtrl.text =
+            context.read<LanguageProvider>().getText('sessionAccount');
+      });
+    }
   }
 
   @override
@@ -82,10 +85,26 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
         _profileDisplayNameKey,
         _fullNameCtrl.text.trim(),
       );
+      final currentUser = _currentUser;
+      if (currentUser != null && currentUser.id.trim().isNotEmpty) {
+        await _usersService.updateUser(
+          id: currentUser.id,
+          username: _fullNameCtrl.text.trim(),
+          email: _emailCtrl.text.trim(),
+          roles: {
+            if (currentUser.role?.trim().isNotEmpty == true)
+              currentUser.role!.trim()
+            else if (currentUser.roles.isNotEmpty)
+              currentUser.roles.first
+            else
+              'USER',
+          },
+        );
+      }
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-                    content: Text(lang.getText('personalInformationSaved')),
+          content: Text(lang.getText('personalInformationSaved')),
           backgroundColor: Colors.green.shade700,
           behavior: SnackBarBehavior.floating,
           shape:
@@ -102,127 +121,132 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
     final isDark = themeProvider.isDarkMode;
     final bgColor = isDark ? const Color(0xFF0A1628) : const Color(0xFFF4F6FA);
     final cardColor = isDark ? const Color(0xFF111C30) : Colors.white;
-    final borderColor =
-        isDark ? Colors.white.withValues(alpha: 0.07) : Colors.grey.withValues(alpha: 0.15);
+    final borderColor = isDark
+        ? Colors.white.withValues(alpha: 0.07)
+        : Colors.grey.withValues(alpha: 0.15);
 
-    return WillPopScope(
-      onWillPop: () => AppNavigation.handleSystemBack(
-        context,
-        fallbackRoute: '/profile',
-      ),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        AppNavigation.handleSystemBack(
+          context,
+          fallbackRoute: '/profile',
+        );
+      },
       child: Directionality(
         textDirection: lang.isArabic ? TextDirection.rtl : TextDirection.ltr,
         child: Scaffold(
-        backgroundColor: bgColor,
-        appBar: AppBar(
-          backgroundColor: isDark ? const Color(0xFF0A1628) : Colors.white,
-          elevation: 0,
-          leading: IconButton(
-            icon: Icon(Icons.arrow_back,
-                color: isDark ? Colors.white : Colors.black87),
-            onPressed: () => AppNavigation.goBack(
-              context,
-              fallbackRoute: '/profile',
+          backgroundColor: bgColor,
+          appBar: AppBar(
+            backgroundColor: isDark ? const Color(0xFF0A1628) : Colors.white,
+            elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back,
+                  color: isDark ? Colors.white : Colors.black87),
+              onPressed: () => AppNavigation.goBack(
+                context,
+                fallbackRoute: '/profile',
+              ),
             ),
-          ),
-          title: Text(
-            lang.getText('personalInfo'),
-            style: TextStyle(
-              color: isDark ? Colors.white : Colors.black87,
-              fontWeight: FontWeight.bold,
-              fontSize: 18,
+            title: Text(
+              lang.getText('personalInfo'),
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontWeight: FontWeight.bold,
+                fontSize: 18,
+              ),
             ),
-          ),
-          actions: [
-            Padding(
-              padding: const EdgeInsets.only(right: 12),
-              child: TextButton.icon(
-                onPressed: _toggleEdit,
-                icon: Icon(
-                  _isEditing ? Icons.check : Icons.edit_outlined,
-                  size: 18,
-                  color: _isEditing ? Colors.green : Colors.blueAccent,
-                ),
-                label: Text(
-                  _isEditing
-                      ? (lang.getText('save'))
-                      : (lang.getText('edit')),
-                  style: TextStyle(
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 12),
+                child: TextButton.icon(
+                  onPressed: _toggleEdit,
+                  icon: Icon(
+                    _isEditing ? Icons.check : Icons.edit_outlined,
+                    size: 18,
                     color: _isEditing ? Colors.green : Colors.blueAccent,
-                    fontWeight: FontWeight.w600,
                   ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        body: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // ── Basic Details ────────────────────────────────────────
-              _sectionHeader(
-                isDark,
-                icon: Icons.person_outline,
-                label: lang.getText('basicDetails'),
-              ),
-              const SizedBox(height: 12),
-              _card(cardColor, borderColor, [
-                _field(isDark,
-                    label: lang.getText('fullName'),
-                    ctrl: _fullNameCtrl,
-                    icon: Icons.badge_outlined),
-                _field(isDark,
-                    label: lang.getText('nationalId'),
-                    ctrl: _nationalIdCtrl,
-                    icon: Icons.credit_card_outlined),
-                _field(isDark,
-                    label: lang.getText('dateOfBirth'),
-                    ctrl: _dobCtrl,
-                    icon: Icons.calendar_today_outlined,
-                    type: TextInputType.datetime),
-                _genderRow(isDark, label: lang.getText('gender')),
-                _field(isDark,
-                    label: lang.getText('phoneNumber'),
-                    ctrl: _phoneCtrl,
-                    icon: Icons.phone_outlined,
-                    type: TextInputType.phone),
-                _field(isDark,
-                    label: lang.getText('emailLabel'),
-                    ctrl: _emailCtrl,
-                    icon: Icons.email_outlined,
-                    type: TextInputType.emailAddress),
-              ]),
-
-              const SizedBox(height: 28),
-
-              if (_isEditing)
-                SizedBox(
-                  width: double.infinity,
-                  child: ElevatedButton.icon(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.blueAccent,
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                    ),
-                    onPressed: _toggleEdit,
-                    icon: const Icon(Icons.check, color: Colors.white),
-                    label: Text(
-                      lang.getText('saveChanges'),
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15),
+                  label: Text(
+                    _isEditing
+                        ? (lang.getText('save'))
+                        : (lang.getText('edit')),
+                    style: TextStyle(
+                      color: _isEditing ? Colors.green : Colors.blueAccent,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
-
-              const SizedBox(height: 40),
+              ),
             ],
           ),
-        ),
+          body: SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // ── Basic Details ────────────────────────────────────────
+                _sectionHeader(
+                  isDark,
+                  icon: Icons.person_outline,
+                  label: lang.getText('basicDetails'),
+                ),
+                const SizedBox(height: 12),
+                _card(cardColor, borderColor, [
+                  _field(isDark,
+                      label: lang.getText('fullName'),
+                      ctrl: _fullNameCtrl,
+                      icon: Icons.badge_outlined),
+                  _field(isDark,
+                      label: lang.getText('nationalId'),
+                      ctrl: _nationalIdCtrl,
+                      icon: Icons.credit_card_outlined),
+                  _field(isDark,
+                      label: lang.getText('dateOfBirth'),
+                      ctrl: _dobCtrl,
+                      icon: Icons.calendar_today_outlined,
+                      type: TextInputType.datetime),
+                  _genderRow(isDark, label: lang.getText('gender')),
+                  _field(isDark,
+                      label: lang.getText('phoneNumber'),
+                      ctrl: _phoneCtrl,
+                      icon: Icons.phone_outlined,
+                      type: TextInputType.phone),
+                  _field(isDark,
+                      label: lang.getText('emailLabel'),
+                      ctrl: _emailCtrl,
+                      icon: Icons.email_outlined,
+                      type: TextInputType.emailAddress),
+                ]),
+
+                const SizedBox(height: 28),
+
+                if (_isEditing)
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.blueAccent,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                      ),
+                      onPressed: _toggleEdit,
+                      icon: const Icon(Icons.check, color: Colors.white),
+                      label: Text(
+                        lang.getText('saveChanges'),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15),
+                      ),
+                    ),
+                  ),
+
+                const SizedBox(height: 40),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -372,4 +396,3 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
     );
   }
 }
-
