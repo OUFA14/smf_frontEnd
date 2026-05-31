@@ -5,11 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../data/mock_monitoring_data.dart';
 import '../../models/event_log.dart';
 import '../../providers/language_provider.dart';
 import '../../models/user.dart';
-import '../../services/auth_service.dart';
 import '../../services/events_service.dart';
 import '../../services/users_service.dart';
 import '../../services/zones_service.dart';
@@ -35,16 +33,12 @@ class _ProfilePageState extends State<ProfilePage> {
   static const _profileDisplayNameKey = 'profile_display_name';
   static const _firstActiveAtKey = 'profile_first_active_at';
   static const _notificationSettingsKey = 'profile_notification_settings';
-  static const _reportsGeneratedCount = 3;
   User? _currentUser;
   String? _profileImageUrl;
   String? _profileDisplayName;
-  int _alertsHandled = MockMonitoringData.alerts
-      .where((alert) => alert.status.toLowerCase() != 'open')
-      .length;
-  int _zonesMonitored =
-      MockMonitoringData.alerts.map((alert) => alert.zone).toSet().length;
-  int _reportsGenerated = _reportsGeneratedCount;
+  int _alertsHandled = 0;
+  int _zonesMonitored = 0;
+  int _reportsGenerated = 0;
   int _daysActive = 1;
   List<_Activity> _recentActivities = const [];
   final List<_ProfileNotification> _notifications = const [];
@@ -103,7 +97,8 @@ class _ProfilePageState extends State<ProfilePage> {
   Future<void> _loadProfileDisplayName() async {
     final prefs = await SharedPreferences.getInstance();
     if (!mounted) return;
-    setState(() => _profileDisplayName = prefs.getString(_profileDisplayNameKey));
+    setState(
+        () => _profileDisplayName = prefs.getString(_profileDisplayNameKey));
   }
 
   Future<void> _loadProfileStats() async {
@@ -116,38 +111,53 @@ class _ProfilePageState extends State<ProfilePage> {
       await prefs.setString(_firstActiveAtKey, firstActive.toIso8601String());
     }
 
-    var zonesMonitored =
-        MockMonitoringData.alerts.map((alert) => alert.zone).toSet().length;
+    var zonesMonitored = 0;
+    var alertsHandled = 0;
     try {
       final zones = await _zonesService.getZones();
       zonesMonitored = zones.length;
     } catch (_) {
-      // Keep the local alert-zone fallback when the API is unavailable.
+      zonesMonitored = 0;
+    }
+
+    try {
+      final events = await _eventsService.getEvents(since: 3600 * 24 * 30);
+      alertsHandled = events.where(_eventLooksResolvedOrHandled).length;
+    } catch (_) {
+      alertsHandled = 0;
     }
 
     if (!mounted) return;
     setState(() {
-      _alertsHandled = MockMonitoringData.alerts
-          .where((alert) => alert.status.toLowerCase() != 'open')
-          .length;
+      _alertsHandled = alertsHandled;
       _zonesMonitored = zonesMonitored;
-      _reportsGenerated = _reportsGeneratedCount;
+      _reportsGenerated = 0;
       _daysActive = now.difference(firstActive!).inDays + 1;
     });
+  }
+
+  bool _eventLooksResolvedOrHandled(EventLog event) {
+    final normalized =
+        '${event.eventType} ${event.message ?? ''} ${event.rawMetadata}'
+            .toLowerCase();
+    return normalized.contains('resolved') ||
+        normalized.contains('closed') ||
+        normalized.contains('acknowledged') ||
+        normalized.contains('handled');
   }
 
   Future<void> _loadRecentActivity() async {
     try {
       final events = await _eventsService.getEvents(since: 3600 * 24 * 7);
-      final sortedEvents = [...events]
-        ..sort((a, b) {
+      final sortedEvents = [...events]..sort((a, b) {
           final aDate = a.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           final bDate = b.createdAt ?? DateTime.fromMillisecondsSinceEpoch(0);
           return bDate.compareTo(aDate);
         });
       if (!mounted) return;
       setState(() {
-        _recentActivities = sortedEvents.take(8).map(_activityFromEvent).toList();
+        _recentActivities =
+            sortedEvents.take(8).map(_activityFromEvent).toList();
       });
     } catch (_) {
       if (!mounted) return;
@@ -196,7 +206,9 @@ class _ProfilePageState extends State<ProfilePage> {
     if (diff.inMinutes < 1) return 'Just now';
     if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
     if (diff.inHours < 24) return '${diff.inHours} hr ago';
-    if (diff.inDays < 7) return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+    if (diff.inDays < 7) {
+      return '${diff.inDays} day${diff.inDays == 1 ? '' : 's'} ago';
+    }
     return '${createdAt.toLocal().month}/${createdAt.toLocal().day}/${createdAt.toLocal().year}';
   }
 
@@ -229,14 +241,8 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadCurrentUser() async {
-    final userId = AuthService.instance.userId;
-    if (userId == null || userId.isEmpty) {
-      setState(() => _currentUser = _fallbackUser);
-      return;
-    }
-
     try {
-      final user = await _usersService.getUser(userId);
+      final user = await _usersService.getCurrentUser();
       if (!mounted) return;
       setState(() => _currentUser = user);
       if ((user.pictureUrl ?? '').trim().isNotEmpty) {
@@ -357,10 +363,10 @@ class _ProfilePageState extends State<ProfilePage> {
 
   User get _fallbackUser => const User(
         id: '',
-        name: 'Admin User',
-        email: 'admin@smf.com',
-        role: 'ADMIN',
-        roles: ['ADMIN'],
+        name: 'System User',
+        email: 'system@smf.local',
+        role: 'USER',
+        roles: ['USER'],
       );
 
   @override
@@ -375,56 +381,139 @@ class _ProfilePageState extends State<ProfilePage> {
     final shellPadding = size.width >= 760 ? 28.0 : 16.0;
     final currentUser = _currentUser ?? _fallbackUser;
 
-    return WillPopScope(
-      onWillPop: () => AppNavigation.handleSystemBack(context),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        AppNavigation.handleSystemBack(context);
+      },
       child: Directionality(
         textDirection:
             languageProvider.isArabic ? TextDirection.rtl : TextDirection.ltr,
         child: Scaffold(
-        backgroundColor: palette.background,
-        body: AnimatedContainer(
-          duration: const Duration(milliseconds: 320),
-          curve: Curves.easeOutCubic,
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: palette.backgroundGradient,
+          backgroundColor: palette.background,
+          body: AnimatedContainer(
+            duration: const Duration(milliseconds: 320),
+            curve: Curves.easeOutCubic,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: palette.backgroundGradient,
+              ),
             ),
-          ),
-          child: SafeArea(
-            minimum: EdgeInsets.only(top: size.width >= 760 ? 18 : 12),
-            child: SingleChildScrollView(
-              padding: EdgeInsets.fromLTRB(outerPadding, 10, outerPadding, 30),
-              child: _GlassShell(
-                palette: palette,
-                padding: shellPadding,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    _HeaderBar(
-                      palette: palette,
-                      languageProvider: languageProvider,
-                      themeProvider: themeProvider,
-                      onNotificationsTap: _openNotificationCenter,
-                      notificationCount: _notifications.length -
-                          _readNotificationIndexes.length,
-                    ),
-                    const SizedBox(height: 34),
-                    _TitleArea(
-                      palette: palette,
-                      title: languageProvider.getText('profile'),
-                      subtitle: languageProvider.getText('profileSubtitle'),
-                      onBack: () => AppNavigation.goBack(context),
-                    ),
-                    const SizedBox(height: 22),
-                    if (isDesktop)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            flex: 34,
-                            child: _ProfileCard(
+            child: SafeArea(
+              minimum: EdgeInsets.only(top: size.width >= 760 ? 18 : 12),
+              child: SingleChildScrollView(
+                padding:
+                    EdgeInsets.fromLTRB(outerPadding, 10, outerPadding, 30),
+                child: _GlassShell(
+                  palette: palette,
+                  padding: shellPadding,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _HeaderBar(
+                        palette: palette,
+                        languageProvider: languageProvider,
+                        themeProvider: themeProvider,
+                        onNotificationsTap: _openNotificationCenter,
+                        notificationCount: _notifications.length -
+                            _readNotificationIndexes.length,
+                      ),
+                      const SizedBox(height: 34),
+                      _TitleArea(
+                        palette: palette,
+                        title: languageProvider.getText('profile'),
+                        subtitle: languageProvider.getText('profileSubtitle'),
+                        onBack: () => AppNavigation.goBack(context),
+                      ),
+                      const SizedBox(height: 22),
+                      if (isDesktop)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              flex: 34,
+                              child: _ProfileCard(
+                                palette: palette,
+                                languageProvider: languageProvider,
+                                user: currentUser,
+                                profileDisplayName: _profileDisplayName,
+                                imageUrl: _profileImageUrl,
+                                alertsHandled: _alertsHandled,
+                                zonesMonitored: _zonesMonitored,
+                                reportsGenerated: _reportsGenerated,
+                                daysActive: _daysActive,
+                                onEditProfile: _openProfileEditor,
+                                onPickAvatar: _openAvatarPicker,
+                              ),
+                            ),
+                            const SizedBox(width: 18),
+                            Expanded(
+                              flex: 47,
+                              child: _SettingsColumn(
+                                palette: palette,
+                                languageProvider: languageProvider,
+                                onOpenPanel: _openSettingsPanel,
+                                onProfileChanged: _loadProfileDisplayName,
+                              ),
+                            ),
+                            const SizedBox(width: 18),
+                            Expanded(
+                              flex: 29,
+                              child: _RightColumn(
+                                palette: palette,
+                                activities: _recentActivities,
+                                onViewAll: _openRecentActivity,
+                              ),
+                            ),
+                          ],
+                        )
+                      else if (isTablet)
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                children: [
+                                  _ProfileCard(
+                                    palette: palette,
+                                    languageProvider: languageProvider,
+                                    user: currentUser,
+                                    profileDisplayName: _profileDisplayName,
+                                    imageUrl: _profileImageUrl,
+                                    alertsHandled: _alertsHandled,
+                                    zonesMonitored: _zonesMonitored,
+                                    reportsGenerated: _reportsGenerated,
+                                    daysActive: _daysActive,
+                                    onEditProfile: _openProfileEditor,
+                                    onPickAvatar: _openAvatarPicker,
+                                  ),
+                                  const SizedBox(height: 18),
+                                  _RightColumn(
+                                    palette: palette,
+                                    activities: _recentActivities,
+                                    onViewAll: _openRecentActivity,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 18),
+                            Expanded(
+                              child: _SettingsColumn(
+                                palette: palette,
+                                languageProvider: languageProvider,
+                                onOpenPanel: _openSettingsPanel,
+                                onProfileChanged: _loadProfileDisplayName,
+                              ),
+                            ),
+                          ],
+                        )
+                      else
+                        Column(
+                          children: [
+                            _ProfileCard(
                               palette: palette,
                               languageProvider: languageProvider,
                               user: currentUser,
@@ -437,115 +526,37 @@ class _ProfilePageState extends State<ProfilePage> {
                               onEditProfile: _openProfileEditor,
                               onPickAvatar: _openAvatarPicker,
                             ),
-                          ),
-                          const SizedBox(width: 18),
-                          Expanded(
-                            flex: 47,
-                            child: _SettingsColumn(
+                            const SizedBox(height: 18),
+                            _SettingsColumn(
                               palette: palette,
                               languageProvider: languageProvider,
                               onOpenPanel: _openSettingsPanel,
                               onProfileChanged: _loadProfileDisplayName,
                             ),
-                          ),
-                          const SizedBox(width: 18),
-                          Expanded(
-                            flex: 29,
-                            child: _RightColumn(
+                            const SizedBox(height: 18),
+                            _RightColumn(
                               palette: palette,
                               activities: _recentActivities,
                               onViewAll: _openRecentActivity,
                             ),
+                          ],
+                        ),
+                      const SizedBox(height: 28),
+                      Center(
+                        child: Text(
+                          '© 2025 SMF Security Monitoring. All rights reserved.',
+                          style: TextStyle(
+                            color: palette.mutedText,
+                            fontWeight: FontWeight.w600,
                           ),
-                        ],
-                      )
-                    else if (isTablet)
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Expanded(
-                            child: Column(
-                              children: [
-                                _ProfileCard(
-                                  palette: palette,
-                                  languageProvider: languageProvider,
-                                  user: currentUser,
-                                  profileDisplayName: _profileDisplayName,
-                                  imageUrl: _profileImageUrl,
-                                  alertsHandled: _alertsHandled,
-                                  zonesMonitored: _zonesMonitored,
-                                  reportsGenerated: _reportsGenerated,
-                                  daysActive: _daysActive,
-                                  onEditProfile: _openProfileEditor,
-                                  onPickAvatar: _openAvatarPicker,
-                                ),
-                                const SizedBox(height: 18),
-                                _RightColumn(
-                                  palette: palette,
-                                  activities: _recentActivities,
-                                  onViewAll: _openRecentActivity,
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 18),
-                          Expanded(
-                            child: _SettingsColumn(
-                              palette: palette,
-                              languageProvider: languageProvider,
-                              onOpenPanel: _openSettingsPanel,
-                              onProfileChanged: _loadProfileDisplayName,
-                            ),
-                          ),
-                        ],
-                      )
-                    else
-                      Column(
-                        children: [
-                          _ProfileCard(
-                            palette: palette,
-                            languageProvider: languageProvider,
-                            user: currentUser,
-                            profileDisplayName: _profileDisplayName,
-                            imageUrl: _profileImageUrl,
-                            alertsHandled: _alertsHandled,
-                            zonesMonitored: _zonesMonitored,
-                            reportsGenerated: _reportsGenerated,
-                            daysActive: _daysActive,
-                            onEditProfile: _openProfileEditor,
-                            onPickAvatar: _openAvatarPicker,
-                          ),
-                          const SizedBox(height: 18),
-                          _SettingsColumn(
-                            palette: palette,
-                            languageProvider: languageProvider,
-                            onOpenPanel: _openSettingsPanel,
-                            onProfileChanged: _loadProfileDisplayName,
-                          ),
-                          const SizedBox(height: 18),
-                          _RightColumn(
-                            palette: palette,
-                            activities: _recentActivities,
-                            onViewAll: _openRecentActivity,
-                          ),
-                        ],
-                      ),
-                    const SizedBox(height: 28),
-                    Center(
-                      child: Text(
-                        '© 2025 SMF Security Monitoring. All rights reserved.',
-                        style: TextStyle(
-                          color: palette.mutedText,
-                          fontWeight: FontWeight.w600,
                         ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
               ),
             ),
           ),
-        ),
         ),
       ),
     );
@@ -689,7 +700,8 @@ class _ProfileCard extends StatelessWidget {
                 center: const Alignment(0, -0.18),
                 radius: 1.10,
                 colors: [
-                  _ProfileColors.blue.withValues(alpha: palette.isDark ? 0.26 : 0.11),
+                  _ProfileColors.blue
+                      .withValues(alpha: palette.isDark ? 0.26 : 0.11),
                   Colors.transparent,
                 ],
               ),
@@ -800,13 +812,19 @@ String _profileDisplayName(User user, LanguageProvider lang) {
 }
 
 String _profileRole(User user) {
+  final primaryRole = (user.role ?? '').trim().replaceFirst(
+        RegExp(r'^ROLE_'),
+        '',
+      );
+  if (primaryRole.isNotEmpty) return primaryRole.toUpperCase();
+
   final roles = user.roles
       .where((role) => role.trim().isNotEmpty)
       .map((role) => role.replaceFirst(RegExp(r'^ROLE_'), ''))
       .toList();
-  if (roles.any((role) => role.toUpperCase() == 'ADMIN')) return 'ADMIN';
-  final role = (user.role ?? '').trim().replaceFirst(RegExp(r'^ROLE_'), '');
-  return role.isEmpty ? 'System User' : role.toUpperCase();
+  if (roles.isNotEmpty) return roles.first.toUpperCase();
+
+  return 'USER';
 }
 
 String _localizedProfileRole(User user, LanguageProvider lang) {
@@ -1178,7 +1196,7 @@ class _RecentActivityCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-      final languageProvider = context.watch<LanguageProvider>();
+    final languageProvider = context.watch<LanguageProvider>();
     return _GlowCard(
       palette: palette,
       child: Column(
@@ -1326,8 +1344,8 @@ class _GlassShell extends StatelessWidget {
         border: Border.all(color: palette.shellBorder),
         boxShadow: [
           BoxShadow(
-            color:
-                _ProfileColors.blue.withValues(alpha: palette.isDark ? 0.12 : 0.10),
+            color: _ProfileColors.blue
+                .withValues(alpha: palette.isDark ? 0.12 : 0.10),
             blurRadius: 38,
             offset: const Offset(0, 18),
           ),
@@ -1367,8 +1385,8 @@ class _GlowCard extends StatelessWidget {
         border: Border.all(color: palette.cardBorder),
         boxShadow: [
           BoxShadow(
-            color:
-                _ProfileColors.cyan.withValues(alpha: palette.isDark ? 0.08 : 0.05),
+            color: _ProfileColors.cyan
+                .withValues(alpha: palette.isDark ? 0.08 : 0.05),
             blurRadius: 26,
             offset: const Offset(0, 12),
           ),
@@ -1409,8 +1427,8 @@ class _CircleButton extends StatelessWidget {
           border: Border.all(color: palette.controlBorder),
           boxShadow: [
             BoxShadow(
-              color:
-                  _ProfileColors.blue.withValues(alpha: palette.isDark ? 0.12 : 0.08),
+              color: _ProfileColors.blue
+                  .withValues(alpha: palette.isDark ? 0.12 : 0.08),
               blurRadius: 20,
             ),
           ],
@@ -1485,7 +1503,8 @@ class _AvatarPicker extends StatelessWidget {
                   gradient: const LinearGradient(
                     colors: [_ProfileColors.cyan, _ProfileColors.blue],
                   ),
-                  border: Border.all(color: Colors.white.withValues(alpha: 0.55)),
+                  border:
+                      Border.all(color: Colors.white.withValues(alpha: 0.55)),
                   boxShadow: [
                     BoxShadow(
                       color: _ProfileColors.cyan.withValues(alpha: 0.45),
@@ -2139,7 +2158,8 @@ class _BottomSheetShell extends StatelessWidget {
           border: Border.all(color: palette.cardBorder),
           boxShadow: [
             BoxShadow(
-              color: Colors.black.withValues(alpha: palette.isDark ? 0.35 : 0.12),
+              color:
+                  Colors.black.withValues(alpha: palette.isDark ? 0.35 : 0.12),
               blurRadius: 32,
               offset: const Offset(0, 18),
             ),
