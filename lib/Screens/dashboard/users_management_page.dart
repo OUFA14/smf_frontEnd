@@ -234,7 +234,8 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
       options.add(
         _DeviceAssignmentOption.register(
           id: 'register:${device.id}',
-          label: '${_deviceOptionLabel(device, context.read<LanguageProvider>())} (new)',
+          label:
+              '${_deviceOptionLabel(device, context.read<LanguageProvider>())} (new)',
           smfDevice: device,
         ),
       );
@@ -251,7 +252,8 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
           break;
         }
       }
-      final ownerSuffix = currentOwner == null ? '' : ' - assigned to $currentOwner';
+      final ownerSuffix =
+          currentOwner == null ? '' : ' - assigned to $currentOwner';
       options.add(
         _DeviceAssignmentOption.reassign(
           id: 'reassign:${device.id}',
@@ -434,6 +436,73 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
     }
   }
 
+  Future<void> _editUserAccount(User user) async {
+    final updated = await _showUserAccountDialog(
+      context,
+      user: user,
+      roles: _roles,
+      onSubmit: ({
+        required String username,
+        required String email,
+        required String? password,
+        required Set<String> roles,
+      }) {
+        return _usersService.updateUser(
+          id: user.id,
+          username: username,
+          email: email,
+          password: password,
+          roles: roles,
+        );
+      },
+    );
+
+    if (updated == true) {
+      await _load();
+    }
+  }
+
+  Future<void> _deleteUserAccount(User user) async {
+    final name = user.name.isEmpty ? user.email : user.name;
+    final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (context) => AlertDialog(
+            title: const Text('Delete user account?'),
+            content: Text(
+              'This permanently deletes $name and removes the account from the backend.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(context.read<LanguageProvider>().getText('cancel')),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context, true),
+                icon: const Icon(Icons.delete_outline_rounded, size: 18),
+                label: Text(context.read<LanguageProvider>().getText('delete')),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+    if (!confirmed) return;
+
+    try {
+      await _usersService.deleteUser(user.id);
+      FrontendReportSnapshot.instance.removeWorkerProfile(user.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('User account deleted.')),
+      );
+      await _load();
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(error.message)),
+      );
+    }
+  }
+
   Future<void> _deleteWorkerProfile(User user) async {
     final confirmed = await showDialog<bool>(
           context: context,
@@ -525,10 +594,8 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
             ? totalPages
             : _currentPage;
     final startIndex = (currentPage - 1) * _usersPerPage;
-    final visibleUsers = filteredUsers
-        .skip(startIndex)
-        .take(_usersPerPage)
-        .toList();
+    final visibleUsers =
+        filteredUsers.skip(startIndex).take(_usersPerPage).toList();
 
     return _UsersConsole(
       users: visibleUsers,
@@ -556,8 +623,10 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
       onRefresh: _isLoading ? null : _load,
       onAddUser: _isLoading ? null : _showCreateWorkerUserDialog,
       onDetails: _showDetails,
+      onEditAccount: _editUserAccount,
       onEditProfile: _editWorkerProfile,
       onDeleteProfile: _deleteWorkerProfile,
+      onDeleteAccount: _deleteUserAccount,
       onAssignDevice: _assignDevice,
       assignedDevicesFor: _assignedDevicesFor,
     );
@@ -572,6 +641,152 @@ typedef _WorkerUserSubmit = Future<void> Function({
   required String? smfDeviceLabel,
   required Map<String, String> workerFields,
 });
+
+typedef _UserAccountSubmit = Future<void> Function({
+  required String username,
+  required String email,
+  required String? password,
+  required Set<String> roles,
+});
+
+Future<bool?> _showUserAccountDialog(
+  BuildContext context, {
+  required User user,
+  required List<RoleSummary> roles,
+  required _UserAccountSubmit onSubmit,
+}) async {
+  final lang = context.read<LanguageProvider>();
+  final formKey = GlobalKey<FormState>();
+  final usernameController = TextEditingController(text: user.name);
+  final emailController = TextEditingController(text: user.email);
+  final passwordController = TextEditingController();
+  final availableRoles = roles.map((role) => role.roleName).toList();
+  var selectedRole = (user.roles.isNotEmpty ? user.roles.first : user.role)
+          ?.replaceFirst(RegExp(r'^ROLE_'), '') ??
+      (availableRoles.isNotEmpty ? availableRoles.first : 'USER');
+  if (availableRoles.isNotEmpty &&
+      !availableRoles.any(
+        (role) => role.toUpperCase() == selectedRole.toUpperCase(),
+      )) {
+    selectedRole = availableRoles.first;
+  }
+  var isSaving = false;
+
+  final result = await showDialog<bool>(
+    context: context,
+    barrierDismissible: false,
+    builder: (context) => StatefulBuilder(
+      builder: (context, setDialogState) => AlertDialog(
+        title: const Text('Edit user account'),
+        content: SizedBox(
+          width: 420,
+          child: Form(
+            key: formKey,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextFormField(
+                  controller: usernameController,
+                  decoration: const InputDecoration(
+                    labelText: 'Username',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) =>
+                      value == null || value.trim().isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: emailController,
+                  decoration: const InputDecoration(
+                    labelText: 'Email',
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (value) =>
+                      value == null || value.trim().isEmpty ? 'Required' : null,
+                ),
+                const SizedBox(height: 12),
+                TextFormField(
+                  controller: passwordController,
+                  obscureText: true,
+                  decoration: const InputDecoration(
+                    labelText: 'New password (optional)',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: selectedRole,
+                  decoration: InputDecoration(
+                    labelText: lang.getText('role'),
+                    border: const OutlineInputBorder(),
+                  ),
+                  items:
+                      (availableRoles.isEmpty ? [selectedRole] : availableRoles)
+                          .map(
+                            (role) => DropdownMenuItem(
+                              value: role,
+                              child: Text(_localizedUserRole(role, lang)),
+                            ),
+                          )
+                          .toList(),
+                  onChanged: (value) {
+                    if (value == null) return;
+                    setDialogState(() => selectedRole = value);
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: isSaving ? null : () => Navigator.pop(context, false),
+            child: Text(lang.getText('cancel')),
+          ),
+          FilledButton.icon(
+            onPressed: isSaving
+                ? null
+                : () async {
+                    if (!formKey.currentState!.validate()) return;
+                    setDialogState(() => isSaving = true);
+                    try {
+                      await onSubmit(
+                        username: usernameController.text.trim(),
+                        email: emailController.text.trim(),
+                        password: passwordController.text.trim().isEmpty
+                            ? null
+                            : passwordController.text.trim(),
+                        roles: {selectedRole},
+                      );
+                      if (context.mounted) Navigator.pop(context, true);
+                    } on ApiException catch (error) {
+                      setDialogState(() => isSaving = false);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(error.message)),
+                        );
+                      }
+                    }
+                  },
+            icon: isSaving
+                ? const SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
+                : const Icon(Icons.save_rounded, size: 18),
+            label: Text(lang.getText('save')),
+          ),
+        ],
+      ),
+    ),
+  );
+
+  usernameController.dispose();
+  emailController.dispose();
+  passwordController.dispose();
+  return result;
+}
 
 Future<bool?> _showWorkerUserFormDialog(
   BuildContext context, {
@@ -683,7 +898,8 @@ Future<bool?> _showWorkerUserFormDialog(
                 fields['emergency_contact_relation']!,
                 'Emergency Contact Relationship',
               ),
-              _workerField(context, fields['emergency_phone']!, 'Emergency Phone'),
+              _workerField(
+                  context, fields['emergency_phone']!, 'Emergency Phone'),
             ],
           ),
           _WorkerFormSection(
@@ -820,8 +1036,9 @@ Future<bool?> _showWorkerUserFormDialog(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       TextButton(
-                        onPressed:
-                            isSaving ? null : () => Navigator.pop(context, false),
+                        onPressed: isSaving
+                            ? null
+                            : () => Navigator.pop(context, false),
                         child: Text(lang.getText('cancel')),
                       ),
                       const SizedBox(width: 12),
@@ -847,10 +1064,9 @@ Future<bool?> _showWorkerUserFormDialog(
                                     email: fields['email']!.text.trim(),
                                     password: fields['password']!.text,
                                     roleName: selectedRole,
-                                    smfDeviceLabel:
-                                        selectedDeviceLabel.isEmpty
-                                            ? null
-                                            : selectedDeviceLabel,
+                                    smfDeviceLabel: selectedDeviceLabel.isEmpty
+                                        ? null
+                                        : selectedDeviceLabel,
                                     workerFields: workerFields,
                                   );
                                   if (context.mounted) {
@@ -869,7 +1085,8 @@ Future<bool?> _showWorkerUserFormDialog(
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.save_rounded, size: 18),
                         label: Text(lang.getText('save')),
@@ -902,7 +1119,8 @@ Future<bool?> _showWorkerProfileEditDialog(
   final fields = {
     'full_name_ar': TextEditingController(text: worker.fullNameAr),
     'full_name_en': TextEditingController(text: worker.fullNameEn),
-    'date_of_birth': TextEditingController(text: _displayDate(worker.dateOfBirth)),
+    'date_of_birth':
+        TextEditingController(text: _displayDate(worker.dateOfBirth)),
     'address_ar': TextEditingController(text: worker.addressAr),
     'address_en': TextEditingController(text: worker.addressEn),
     'phone': TextEditingController(text: worker.phone),
@@ -912,8 +1130,10 @@ Future<bool?> _showWorkerProfileEditDialog(
     'company_en': TextEditingController(text: worker.companyEn),
     'work_location_ar': TextEditingController(text: worker.workLocationAr),
     'work_location_en': TextEditingController(text: worker.workLocationEn),
-    'medical_condition_ar': TextEditingController(text: worker.medicalConditionAr),
-    'medical_condition_en': TextEditingController(text: worker.medicalConditionEn),
+    'medical_condition_ar':
+        TextEditingController(text: worker.medicalConditionAr),
+    'medical_condition_en':
+        TextEditingController(text: worker.medicalConditionEn),
     'clinical_notes_ar': TextEditingController(text: worker.clinicalNotesAr),
     'clinical_notes_en': TextEditingController(text: worker.clinicalNotesEn),
     'emergency_contact_name':
@@ -998,7 +1218,8 @@ Future<bool?> _showWorkerProfileEditDialog(
                 fields['emergency_contact_relation']!,
                 'Emergency Contact Relationship',
               ),
-              _workerField(context, fields['emergency_phone']!, 'Emergency Phone'),
+              _workerField(
+                  context, fields['emergency_phone']!, 'Emergency Phone'),
             ],
           ),
         ];
@@ -1069,8 +1290,9 @@ Future<bool?> _showWorkerProfileEditDialog(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
                       TextButton(
-                        onPressed:
-                            isSaving ? null : () => Navigator.pop(context, false),
+                        onPressed: isSaving
+                            ? null
+                            : () => Navigator.pop(context, false),
                         child: Text(lang.getText('cancel')),
                       ),
                       const SizedBox(width: 12),
@@ -1104,7 +1326,8 @@ Future<bool?> _showWorkerProfileEditDialog(
                             ? const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2),
                               )
                             : const Icon(Icons.save_rounded, size: 18),
                         label: Text(lang.getText('save')),
@@ -1146,7 +1369,8 @@ Widget _workerField(
             final current = DateTime.tryParse(controller.text.trim());
             final picked = await showDatePicker(
               context: context,
-              initialDate: current ?? DateTime(now.year - 25, now.month, now.day),
+              initialDate:
+                  current ?? DateTime(now.year - 25, now.month, now.day),
               firstDate: DateTime(1900),
               lastDate: now,
             );
@@ -1439,8 +1663,10 @@ class _UsersConsole extends StatelessWidget {
   final VoidCallback? onRefresh;
   final VoidCallback? onAddUser;
   final ValueChanged<User> onDetails;
+  final ValueChanged<User> onEditAccount;
   final ValueChanged<User> onEditProfile;
   final ValueChanged<User> onDeleteProfile;
+  final ValueChanged<User> onDeleteAccount;
   final ValueChanged<User> onAssignDevice;
   final List<DeviceRecord> Function(User user) assignedDevicesFor;
 
@@ -1457,8 +1683,10 @@ class _UsersConsole extends StatelessWidget {
     required this.onRefresh,
     required this.onAddUser,
     required this.onDetails,
+    required this.onEditAccount,
     required this.onEditProfile,
     required this.onDeleteProfile,
+    required this.onDeleteAccount,
     required this.onAssignDevice,
     required this.assignedDevicesFor,
   });
@@ -1503,8 +1731,10 @@ class _UsersConsole extends StatelessWidget {
                             palette: palette,
                             users: users,
                             onDetails: onDetails,
+                            onEditAccount: onEditAccount,
                             onEditProfile: onEditProfile,
                             onDeleteProfile: onDeleteProfile,
+                            onDeleteAccount: onDeleteAccount,
                             onAssignDevice: onAssignDevice,
                             assignedDevicesFor: assignedDevicesFor,
                           ),
@@ -1649,8 +1879,10 @@ class _UsersTable extends StatelessWidget {
   final _UsersPalette palette;
   final List<User> users;
   final ValueChanged<User> onDetails;
+  final ValueChanged<User> onEditAccount;
   final ValueChanged<User> onEditProfile;
   final ValueChanged<User> onDeleteProfile;
+  final ValueChanged<User> onDeleteAccount;
   final ValueChanged<User> onAssignDevice;
   final List<DeviceRecord> Function(User user) assignedDevicesFor;
 
@@ -1658,8 +1890,10 @@ class _UsersTable extends StatelessWidget {
     required this.palette,
     required this.users,
     required this.onDetails,
+    required this.onEditAccount,
     required this.onEditProfile,
     required this.onDeleteProfile,
+    required this.onDeleteAccount,
     required this.onAssignDevice,
     required this.assignedDevicesFor,
   });
@@ -1677,7 +1911,7 @@ class _UsersTable extends StatelessWidget {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final tableWidth =
-                constraints.maxWidth < 1480 ? 1480.0 : constraints.maxWidth;
+                constraints.maxWidth < 1460 ? 1460.0 : constraints.maxWidth;
             return SingleChildScrollView(
               scrollDirection: Axis.horizontal,
               child: ConstrainedBox(
@@ -1711,8 +1945,10 @@ class _UsersTable extends StatelessWidget {
                                     user: users[index],
                                     index: index,
                                     onDetails: onDetails,
+                                    onEditAccount: onEditAccount,
                                     onEditProfile: onEditProfile,
                                     onDeleteProfile: onDeleteProfile,
+                                    onDeleteAccount: onDeleteAccount,
                                     onAssignDevice: onAssignDevice,
                                     assignedDevices:
                                         assignedDevicesFor(users[index]),
@@ -1748,11 +1984,14 @@ class _UsersTableHeader extends StatelessWidget {
         children: [
           _UsersHeaderCell(lang.getText('user'), width: 260, palette: palette),
           _UsersHeaderCell(lang.getText('role'), width: 180, palette: palette),
-          _UsersHeaderCell(lang.getText('status'), width: 140, palette: palette),
-          _UsersHeaderCell('Violations', width: 138, palette: palette),
-          _UsersHeaderCell(lang.getText('lastSeen'), width: 210, palette: palette),
-          _UsersHeaderCell(lang.getText('assignedDevice'), width: 336, palette: palette),
-          _UsersHeaderCell(lang.getText('actions'), width: 154, palette: palette),
+          _UsersHeaderCell(lang.getText('status'),
+              width: 140, palette: palette),
+          _UsersHeaderCell(lang.getText('lastSeen'),
+              width: 210, palette: palette),
+          _UsersHeaderCell(lang.getText('assignedDevice'),
+              width: 300, palette: palette),
+          _UsersHeaderCell(lang.getText('actions'),
+              width: 290, palette: palette),
         ],
       ),
     );
@@ -1791,8 +2030,10 @@ class _UsersTableRow extends StatelessWidget {
   final User user;
   final int index;
   final ValueChanged<User> onDetails;
+  final ValueChanged<User> onEditAccount;
   final ValueChanged<User> onEditProfile;
   final ValueChanged<User> onDeleteProfile;
+  final ValueChanged<User> onDeleteAccount;
   final ValueChanged<User> onAssignDevice;
   final List<DeviceRecord> assignedDevices;
 
@@ -1801,8 +2042,10 @@ class _UsersTableRow extends StatelessWidget {
     required this.user,
     required this.index,
     required this.onDetails,
+    required this.onEditAccount,
     required this.onEditProfile,
     required this.onDeleteProfile,
+    required this.onDeleteAccount,
     required this.onAssignDevice,
     required this.assignedDevices,
   });
@@ -1812,10 +2055,6 @@ class _UsersTableRow extends StatelessWidget {
     final lang = context.watch<LanguageProvider>();
     final roles = _normalizedRoles(user);
     final accent = _roleColor(roles.first);
-    final violationCount = assignedDevices.fold<int>(
-      0,
-      (total, device) => total + device.violationCount,
-    );
     return Container(
       height: 58,
       color: palette.row,
@@ -1872,13 +2111,6 @@ class _UsersTableRow extends StatelessWidget {
             child: _StatusPill(palette: palette),
           ),
           SizedBox(
-            width: 138,
-            child: _ViolationBadge(
-              count: violationCount,
-              palette: palette,
-            ),
-          ),
-          SizedBox(
             width: 210,
             child: Row(
               children: [
@@ -1897,7 +2129,7 @@ class _UsersTableRow extends StatelessWidget {
             ),
           ),
           SizedBox(
-            width: 336,
+            width: 300,
             child: Text(
               _assignedDevicesLabel(assignedDevices, lang),
               maxLines: 1,
@@ -1912,7 +2144,7 @@ class _UsersTableRow extends StatelessWidget {
             ),
           ),
           SizedBox(
-            width: 154,
+            width: 278,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -1922,6 +2154,14 @@ class _UsersTableRow extends StatelessWidget {
                   palette: palette,
                   tooltip: lang.getText('details'),
                   onPressed: () => onDetails(user),
+                ),
+                const SizedBox(width: 8),
+                _UserActionButton(
+                  icon: Icons.manage_accounts_rounded,
+                  color: palette.blue,
+                  palette: palette,
+                  tooltip: 'Edit account',
+                  onPressed: () => onEditAccount(user),
                 ),
                 const SizedBox(width: 8),
                 _UserActionButton(
@@ -1944,10 +2184,18 @@ class _UsersTableRow extends StatelessWidget {
                 const SizedBox(width: 8),
                 _UserActionButton(
                   icon: Icons.delete_outline_rounded,
-                  color: const Color(0xFFFF3B43),
+                  color: const Color(0xFFFFA51F),
                   palette: palette,
                   tooltip: 'Delete worker info',
                   onPressed: () => onDeleteProfile(user),
+                ),
+                const SizedBox(width: 8),
+                _UserActionButton(
+                  icon: Icons.person_remove_alt_1_rounded,
+                  color: const Color(0xFFFF3B43),
+                  palette: palette,
+                  tooltip: 'Delete account',
+                  onPressed: () => onDeleteAccount(user),
                 ),
               ],
             ),
@@ -2157,96 +2405,6 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
-class _ViolationBadge extends StatelessWidget {
-  final int count;
-  final _UsersPalette palette;
-
-  const _ViolationBadge({
-    required this.count,
-    required this.palette,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = count == 0
-        ? const Color(0xFF19D389)
-        : count <= 3
-            ? const Color(0xFFFFA51F)
-            : const Color(0xFFFF3B43);
-    final label = count == 0
-        ? 'No violations'
-        : count == 1
-            ? '1 violation'
-            : '$count violations';
-
-    final badge = MouseRegion(
-      cursor: SystemMouseCursors.click,
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 5),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: palette.isDark ? 0.18 : 0.10),
-          borderRadius: BorderRadius.circular(7),
-          border: Border.all(color: color.withValues(alpha: 0.36)),
-          boxShadow: count >= 4
-              ? [
-                  BoxShadow(
-                    color: color.withValues(alpha: palette.isDark ? 0.34 : 0.20),
-                    blurRadius: 10,
-                    spreadRadius: 0.5,
-                  ),
-                ]
-              : null,
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (count > 0) ...[
-              Icon(Icons.warning_amber_rounded, color: color, size: 13),
-              const SizedBox(width: 3),
-            ],
-            Text(
-              count.toString(),
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: color,
-                fontSize: 11,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    return Tooltip(
-      message: 'Restricted zone violations',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Semantics(
-            button: true,
-            label: 'Restricted zone violations. History will be available later.',
-            child: badge,
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            child: Text(
-              label,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: TextStyle(
-                color: count == 0 ? palette.textMuted : color,
-                fontSize: 11,
-                fontWeight: FontWeight.w700,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
 class _UserActionButton extends StatelessWidget {
   final IconData icon;
   final Color color;
@@ -2272,8 +2430,7 @@ class _UserActionButton extends StatelessWidget {
         child: OutlinedButton(
           onPressed: onPressed,
           style: OutlinedButton.styleFrom(
-            foregroundColor:
-                onPressed == null ? palette.textMuted : color,
+            foregroundColor: onPressed == null ? palette.textMuted : color,
             backgroundColor: palette.actionBackground,
             side: BorderSide(
               color: (onPressed == null ? palette.textMuted : color)
@@ -2365,16 +2522,14 @@ class _UsersFooter extends StatelessWidget {
             _PageButton(
               icon: Icons.keyboard_double_arrow_left,
               palette: palette,
-              onPressed:
-                  currentPage > 1 ? () => onPageChanged(1) : null,
+              onPressed: currentPage > 1 ? () => onPageChanged(1) : null,
             ),
             const SizedBox(width: 8),
             _PageButton(
               icon: Icons.chevron_left_rounded,
               palette: palette,
-              onPressed: currentPage > 1
-                  ? () => onPageChanged(currentPage - 1)
-                  : null,
+              onPressed:
+                  currentPage > 1 ? () => onPageChanged(currentPage - 1) : null,
             ),
             ...List.generate(
               totalPages,
@@ -2386,9 +2541,8 @@ class _UsersFooter extends StatelessWidget {
                     page: page,
                     isSelected: page == currentPage,
                     palette: palette,
-                    onPressed: page == currentPage
-                        ? null
-                        : () => onPageChanged(page),
+                    onPressed:
+                        page == currentPage ? null : () => onPageChanged(page),
                   ),
                 );
               },
