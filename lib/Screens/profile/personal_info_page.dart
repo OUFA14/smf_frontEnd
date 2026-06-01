@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../theme/app_theme.dart';
 import '../../providers/language_provider.dart';
@@ -19,10 +18,11 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
   bool _isEditing = false;
   final UsersService _usersService = UsersService();
   User? _currentUser;
+  bool _isLoading = true;
+  String? _loadError;
 
   // ── Basic Details ────────────────────────────────────────────────────────
   final _fullNameCtrl = TextEditingController();
-  static const _profileDisplayNameKey = 'profile_display_name';
   final _nationalIdCtrl = TextEditingController();
   final _dobCtrl = TextEditingController(text: "");
   final _phoneCtrl = TextEditingController(text: "");
@@ -37,31 +37,28 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
   }
 
   Future<void> _loadCurrentUser() async {
-    final prefs = await SharedPreferences.getInstance();
-    final savedName = prefs.getString(_profileDisplayNameKey)?.trim();
-    if (savedName != null && savedName.isNotEmpty) {
-      _fullNameCtrl.text = savedName;
-    }
-
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
     try {
       final user = await _usersService.getCurrentUser();
       if (!mounted) return;
       setState(() {
         _currentUser = user;
-        if (savedName == null || savedName.isEmpty) {
-          _fullNameCtrl.text = user.name.trim();
-        }
+        _fullNameCtrl.text = user.name.trim();
         _emailCtrl.text = user.email.trim();
         _phoneCtrl.text = user.phone ?? '';
         _nationalIdCtrl.text = user.id.trim().isEmpty
             ? context.read<LanguageProvider>().getText('sessionAccount')
             : context.read<LanguageProvider>().getText('accountLinked');
+        _isLoading = false;
       });
-    } catch (_) {
+    } catch (error) {
       if (!mounted) return;
       setState(() {
-        _nationalIdCtrl.text =
-            context.read<LanguageProvider>().getText('sessionAccount');
+        _isLoading = false;
+        _loadError = error.toString();
       });
     }
   }
@@ -80,11 +77,6 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
     setState(() => _isEditing = !_isEditing);
     if (!_isEditing) {
       final lang = context.read<LanguageProvider>();
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString(
-        _profileDisplayNameKey,
-        _fullNameCtrl.text.trim(),
-      );
       final currentUser = _currentUser;
       if (currentUser != null && currentUser.id.trim().isNotEmpty) {
         await _usersService.updateUser(
@@ -182,70 +174,84 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
           ),
           body: SingleChildScrollView(
             padding: const EdgeInsets.all(20),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Basic Details ────────────────────────────────────────
-                _sectionHeader(
-                  isDark,
-                  icon: Icons.person_outline,
-                  label: lang.getText('basicDetails'),
-                ),
-                const SizedBox(height: 12),
-                _card(cardColor, borderColor, [
-                  _field(isDark,
-                      label: lang.getText('fullName'),
-                      ctrl: _fullNameCtrl,
-                      icon: Icons.badge_outlined),
-                  _field(isDark,
-                      label: lang.getText('nationalId'),
-                      ctrl: _nationalIdCtrl,
-                      icon: Icons.credit_card_outlined),
-                  _field(isDark,
-                      label: lang.getText('dateOfBirth'),
-                      ctrl: _dobCtrl,
-                      icon: Icons.calendar_today_outlined,
-                      type: TextInputType.datetime),
-                  _genderRow(isDark, label: lang.getText('gender')),
-                  _field(isDark,
-                      label: lang.getText('phoneNumber'),
-                      ctrl: _phoneCtrl,
-                      icon: Icons.phone_outlined,
-                      type: TextInputType.phone),
-                  _field(isDark,
-                      label: lang.getText('emailLabel'),
-                      ctrl: _emailCtrl,
-                      icon: Icons.email_outlined,
-                      type: TextInputType.emailAddress),
-                ]),
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : _loadError != null
+                    ? Center(
+                        child: Text(
+                          _loadError!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: isDark ? Colors.white70 : Colors.black87,
+                          ),
+                        ),
+                      )
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          // ── Basic Details ────────────────────────────────────────
+                          _sectionHeader(
+                            isDark,
+                            icon: Icons.person_outline,
+                            label: lang.getText('basicDetails'),
+                          ),
+                          const SizedBox(height: 12),
+                          _card(cardColor, borderColor, [
+                            _field(isDark,
+                                label: lang.getText('fullName'),
+                                ctrl: _fullNameCtrl,
+                                icon: Icons.badge_outlined),
+                            _field(isDark,
+                                label: lang.getText('nationalId'),
+                                ctrl: _nationalIdCtrl,
+                                icon: Icons.credit_card_outlined),
+                            _field(isDark,
+                                label: lang.getText('dateOfBirth'),
+                                ctrl: _dobCtrl,
+                                icon: Icons.calendar_today_outlined,
+                                type: TextInputType.datetime),
+                            _genderRow(isDark, label: lang.getText('gender')),
+                            _field(isDark,
+                                label: lang.getText('phoneNumber'),
+                                ctrl: _phoneCtrl,
+                                icon: Icons.phone_outlined,
+                                type: TextInputType.phone),
+                            _field(isDark,
+                                label: lang.getText('emailLabel'),
+                                ctrl: _emailCtrl,
+                                icon: Icons.email_outlined,
+                                type: TextInputType.emailAddress),
+                          ]),
 
-                const SizedBox(height: 28),
+                          const SizedBox(height: 28),
 
-                if (_isEditing)
-                  SizedBox(
-                    width: double.infinity,
-                    child: ElevatedButton.icon(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.blueAccent,
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12)),
+                          if (_isEditing)
+                            SizedBox(
+                              width: double.infinity,
+                              child: ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.blueAccent,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 14),
+                                  shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(12)),
+                                ),
+                                onPressed: _toggleEdit,
+                                icon: const Icon(Icons.check,
+                                    color: Colors.white),
+                                label: Text(
+                                  lang.getText('saveChanges'),
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 15),
+                                ),
+                              ),
+                            ),
+
+                          const SizedBox(height: 40),
+                        ],
                       ),
-                      onPressed: _toggleEdit,
-                      icon: const Icon(Icons.check, color: Colors.white),
-                      label: Text(
-                        lang.getText('saveChanges'),
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15),
-                      ),
-                    ),
-                  ),
-
-                const SizedBox(height: 40),
-              ],
-            ),
           ),
         ),
       ),
