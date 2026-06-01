@@ -45,7 +45,6 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage>
     with TickerProviderStateMixin {
   static const _profileImageKey = 'profile_image_url';
-  static const _profileDisplayNameKey = 'profile_display_name';
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   _DashboardTab _selectedTab = _DashboardTab.dashboard;
   final List<_AlertRecord> _alerts = <_AlertRecord>[];
@@ -59,7 +58,6 @@ class _DashboardPageState extends State<DashboardPage>
   final EventsService _eventsService = EventsService();
   User? _currentUser;
   String? _profileImageUrl;
-  String? _profileDisplayName;
   int? _onlineUserCount;
   int? _smfDeviceCount;
   int? _registeredSmfDeviceCount;
@@ -89,7 +87,6 @@ class _DashboardPageState extends State<DashboardPage>
 
     _loadCurrentUser();
     _loadProfileImage();
-    _loadProfileDisplayName();
     _loadAlertsFromEvents();
     _loadOnlineUserCount();
     _loadSmfDeviceCount();
@@ -183,13 +180,6 @@ class _DashboardPageState extends State<DashboardPage>
     setState(() => _profileImageUrl = prefs.getString(_profileImageKey));
   }
 
-  Future<void> _loadProfileDisplayName() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    setState(
-        () => _profileDisplayName = prefs.getString(_profileDisplayNameKey));
-  }
-
   Future<void> _loadCurrentUser() async {
     try {
       final user = await _usersService.getCurrentUser();
@@ -197,15 +187,7 @@ class _DashboardPageState extends State<DashboardPage>
       setState(() => _currentUser = user);
     } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _currentUser = const User(
-          id: '',
-          name: 'System User',
-          email: 'system@smf.local',
-          role: 'USER',
-          roles: ['USER'],
-        );
-      });
+      setState(() => _currentUser = null);
     }
   }
 
@@ -910,10 +892,10 @@ class _DashboardPageState extends State<DashboardPage>
     final user = _currentUser ??
         const User(
           id: '',
-          name: 'Admin User',
+          name: '',
           email: '',
-          role: 'ADMIN',
-          roles: ['ADMIN'],
+          role: 'USER',
+          roles: ['USER'],
         );
 
     return Container(
@@ -1061,7 +1043,6 @@ class _DashboardPageState extends State<DashboardPage>
                       onTap: () {
                         Navigator.pushNamed(context, '/profile').then((_) {
                           _loadProfileImage();
-                          _loadProfileDisplayName();
                         });
                       },
                       child: Container(
@@ -1534,10 +1515,10 @@ class _DashboardPageState extends State<DashboardPage>
                                 text: _displayName(_currentUser ??
                                     const User(
                                       id: '',
-                                      name: 'Admin User',
+                                      name: '',
                                       email: '',
-                                      role: 'ADMIN',
-                                      roles: ['ADMIN'],
+                                      role: 'USER',
+                                      roles: ['USER'],
                                     )),
                                 style: TextStyle(
                                   color: palette.heroHighlight,
@@ -1590,8 +1571,6 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   String _displayName(User user) {
-    final savedName = _profileDisplayName?.trim();
-    if (savedName != null && savedName.isNotEmpty) return savedName;
     final name = user.name.trim();
     if (name.isNotEmpty) return name;
     final email = user.email.trim();
@@ -1607,10 +1586,10 @@ class _DashboardPageState extends State<DashboardPage>
         .where((role) => role.trim().isNotEmpty)
         .map((role) => role.replaceFirst(RegExp(r'^ROLE_'), ''))
         .toList();
-    if (roles.any((role) => role.toUpperCase() == 'ADMIN')) return 'ADMIN';
     final role = (user.role ?? '').trim().replaceFirst(RegExp(r'^ROLE_'), '');
     if (role.isNotEmpty) return role.toUpperCase();
-    return 'System User';
+    if (roles.isNotEmpty) return roles.first.toUpperCase();
+    return 'USER';
   }
 
   Widget _heroAccentRule(_DashboardPalette palette) {
