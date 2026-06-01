@@ -1,5 +1,8 @@
+import 'dart:convert';
+
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../models/user.dart';
 import '../models/auth_session.dart';
 import 'api_service.dart';
 
@@ -152,6 +155,51 @@ class AuthService {
     return {
       'Authorization': 'Bearer $_accessToken',
     };
+  }
+
+  User? userFromAccessToken() {
+    final claims = _decodeJwtClaims(_accessToken);
+    if (claims == null) return null;
+
+    final rawRoles = claims['roles'];
+    final roles = rawRoles is List
+        ? rawRoles.map((role) => role.toString()).toList()
+        : <String>[];
+    final email = (claims['email'] ?? '').toString();
+    final name =
+        (claims['username'] ?? claims['name'] ?? email.split('@').first)
+            .toString();
+
+    return User(
+      id: (claims['sub'] ?? claims['id'] ?? _userId ?? '').toString(),
+      name: name,
+      email: email,
+      role: claims['role']?.toString() ??
+          (roles.isNotEmpty ? roles.first : null),
+      roles: roles,
+    );
+  }
+
+  Map<String, dynamic>? _decodeJwtClaims(String? token) {
+    if (token == null || token.isEmpty) return null;
+    try {
+      final parts = token.split('.');
+      if (parts.length < 2) return null;
+      var payload = parts[1];
+      switch (payload.length % 4) {
+        case 2:
+          payload += '==';
+          break;
+        case 3:
+          payload += '=';
+          break;
+      }
+      final decoded = utf8.decode(base64Url.decode(payload));
+      final claims = jsonDecode(decoded);
+      return claims is Map<String, dynamic> ? claims : null;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> _persistSession(AuthSession session) async {
