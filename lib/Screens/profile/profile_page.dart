@@ -248,7 +248,7 @@ class _ProfilePageState extends State<ProfilePage> {
       _currentUserError = null;
     });
     try {
-      final user = await _usersService.getCurrentUser();
+      final user = await _usersService.getCurrentUserResilient();
       if (!mounted) return;
       setState(() {
         _currentUser = user;
