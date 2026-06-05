@@ -38,6 +38,34 @@ class UsersService {
     return User.fromJson(response.data as Map<String, dynamic>);
   }
 
+  Future<User> getCurrentUser() async {
+    final response = await _apiService.get(
+      '/users/me',
+      headers: await AuthService.instance.authHeaders(),
+    );
+
+    return User.fromJson(response.data as Map<String, dynamic>);
+  }
+
+  Future<User> getCurrentUserResilient() async {
+    try {
+      return await getCurrentUser();
+    } catch (_) {
+      final userId = AuthService.instance.userId;
+      if (userId != null && userId.isNotEmpty) {
+        try {
+          return await getUser(userId);
+        } catch (_) {
+          // Fall through to token claims below.
+        }
+      }
+
+      final tokenUser = AuthService.instance.userFromAccessToken();
+      if (tokenUser != null) return tokenUser;
+      rethrow;
+    }
+  }
+
   Future<User> createUser({
     required String username,
     required String email,

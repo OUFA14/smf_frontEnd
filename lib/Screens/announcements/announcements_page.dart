@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../../providers/language_provider.dart';
+import '../../services/announcements_service.dart';
+import '../../services/api_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/navigation_helper.dart';
 import 'announcement_model.dart';
@@ -19,6 +23,7 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
   final TextEditingController _searchController = TextEditingController();
   final TextEditingController _titleController = TextEditingController();
   final TextEditingController _messageController = TextEditingController();
+  final AnnouncementsService _announcementsService = AnnouncementsService();
 
   final List<_AnnouncementEntry> _announcements = [
     _AnnouncementEntry(
@@ -70,13 +75,69 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
   _AnnouncementFilter _activeFilter = _AnnouncementFilter.all;
   _AnnouncementPriority _selectedPriority = _AnnouncementPriority.medium;
   _ScheduleMode _scheduleMode = _ScheduleMode.now;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  String? _errorMessage;
+  Timer? _searchDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchChanged);
+    _loadAnnouncements();
+  }
 
   @override
   void dispose() {
+    _searchController.removeListener(_onSearchChanged);
+    _searchDebounce?.cancel();
     _searchController.dispose();
     _titleController.dispose();
     _messageController.dispose();
     super.dispose();
+  }
+
+  void _onSearchChanged() {
+    setState(() {});
+    _searchDebounce?.cancel();
+    _searchDebounce = Timer(
+      const Duration(milliseconds: 350),
+      _loadAnnouncements,
+    );
+  }
+
+  Future<void> _loadAnnouncements() async {
+    setState(() {
+      _isLoading = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final announcements = await _announcementsService.getAnnouncements(
+        status:
+            _activeFilter == _AnnouncementFilter.scheduled ? 'SCHEDULED' : null,
+        search: _searchController.text,
+      );
+      if (!mounted) return;
+      setState(() {
+        _announcements
+          ..clear()
+          ..addAll(announcements.map(_entryFromModel));
+        _isLoading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = error.message;
+        _isLoading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Unable to load announcements';
+        _isLoading = false;
+      });
+    }
   }
 
   List<_AnnouncementEntry> get _filteredAnnouncements {
@@ -95,31 +156,72 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
   int get _scheduledCount =>
       _announcements.where((item) => item.scheduled).length;
 
-  void _sendAnnouncement() {
+  Future<void> _sendAnnouncement() async {
     final title = _titleController.text.trim();
     final message = _messageController.text.trim();
-    if (title.isEmpty || message.isEmpty) return;
+    if (title.isEmpty || message.isEmpty || _isSaving) return;
 
     setState(() {
-      _announcements.insert(
-        0,
-        _AnnouncementEntry(
-          model: AnnouncementModel(
-            title: title,
-            message: message,
-            priority: _selectedPriority.label,
-            sender: 'Admin',
-            timestamp: DateTime.now(),
-          ),
-          scheduled: _scheduleMode == _ScheduleMode.later,
-          visual: _AnnouncementVisual.update,
-        ),
+      _isSaving = true;
+      _errorMessage = null;
+    });
+
+    try {
+      final created = await _announcementsService.createAnnouncement(
+        title: title,
+        message: message,
+        priority: _selectedPriority.label,
+        scheduledFor: _scheduleMode == _ScheduleMode.later
+            ? DateTime.now().add(const Duration(hours: 1))
+            : null,
       );
-      _titleController.clear();
-      _messageController.clear();
-      _selectedPriority = _AnnouncementPriority.medium;
-      _scheduleMode = _ScheduleMode.now;
-      _activeFilter = _AnnouncementFilter.all;
+      if (!mounted) return;
+      setState(() {
+        _announcements.insert(0, _entryFromModel(created));
+        _titleController.clear();
+        _messageController.clear();
+        _selectedPriority = _AnnouncementPriority.medium;
+        _scheduleMode = _ScheduleMode.now;
+        _activeFilter = _AnnouncementFilter.all;
+        _isSaving = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = error.message;
+        _isSaving = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage = 'Unable to send announcement';
+        _isSaving = false;
+      });
+    }
+  }
+
+  _AnnouncementEntry _entryFromModel(AnnouncementModel model) {
+    final priority = model.priority.toLowerCase();
+    return _AnnouncementEntry(
+      model: model,
+      scheduled: model.isScheduled,
+      visual: priority == 'high'
+          ? _AnnouncementVisual.sos
+          : priority == 'low'
+              ? _AnnouncementVisual.device
+              : _AnnouncementVisual.update,
+    );
+  }
+
+  Future<void> _deleteAnnouncement(_AnnouncementEntry entry) async {
+    final id = entry.model.id;
+    if (id != null && id.isNotEmpty) {
+      await _announcementsService.deleteAnnouncement(id);
+    }
+
+    setState(() {
+      _announcements.remove(entry);
+      _errorMessage = null;
     });
   }
 
@@ -200,30 +302,83 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
 
     if (!mounted) return;
     if (action == 'delete') {
-      setState(() => _announcements.remove(entry));
+      try {
+        await _deleteAnnouncement(entry);
+      } on ApiException catch (error) {
+        if (!mounted) return;
+        setState(() => _errorMessage = error.message);
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _errorMessage = 'Unable to delete announcement');
+      }
     } else if (action == 'save') {
       final title = titleController.text.trim();
       final message = messageController.text.trim();
       if (title.isEmpty || message.isEmpty) return;
-      setState(() {
-        final index = _announcements.indexOf(entry);
-        if (index == -1) return;
-        _announcements[index] = _AnnouncementEntry(
-          model: AnnouncementModel(
-            title: title,
-            message: message,
-            priority: priority.label,
-            sender: entry.model.sender,
-            timestamp: entry.model.timestamp,
-          ),
-          scheduled: entry.scheduled,
-          visual: entry.visual,
+      if (entry.model.id == null || entry.model.id!.isEmpty) {
+        _saveLocalAnnouncementEdit(
+          entry: entry,
+          title: title,
+          message: message,
+          priority: priority,
         );
-      });
+        titleController.dispose();
+        messageController.dispose();
+        return;
+      }
+      try {
+        final id = entry.model.id;
+        if (id != null && id.isNotEmpty) {
+          await _announcementsService.deleteAnnouncement(id);
+        }
+        final replacement = await _announcementsService.createAnnouncement(
+          title: title,
+          message: message,
+          priority: priority.label,
+          scheduledFor: entry.scheduled
+              ? entry.model.scheduledFor ??
+                  DateTime.now().add(const Duration(hours: 1))
+              : null,
+        );
+        if (!mounted) return;
+        setState(() {
+          final index = _announcements.indexOf(entry);
+          if (index == -1) return;
+          _announcements[index] = _entryFromModel(replacement);
+          _errorMessage = null;
+        });
+      } on ApiException catch (error) {
+        if (!mounted) return;
+        setState(() => _errorMessage = error.message);
+      } catch (_) {
+        if (!mounted) return;
+        setState(() => _errorMessage = 'Unable to save announcement');
+      }
     }
 
     titleController.dispose();
     messageController.dispose();
+  }
+
+  void _saveLocalAnnouncementEdit({
+    required _AnnouncementEntry entry,
+    required String title,
+    required String message,
+    required _AnnouncementPriority priority,
+  }) {
+    setState(() {
+      final index = _announcements.indexOf(entry);
+      if (index == -1) return;
+      _announcements[index] = _AnnouncementEntry(
+        model: entry.model.copyWith(
+          title: title,
+          message: message,
+          priority: priority.label,
+        ),
+        scheduled: entry.scheduled,
+        visual: entry.visual,
+      );
+    });
   }
 
   _AnnouncementPriority _priorityFromLabel(String label) {
@@ -383,8 +538,12 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
 
     if (widget.embedded) return page;
 
-    return WillPopScope(
-      onWillPop: () => AppNavigation.handleSystemBack(context),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        AppNavigation.handleSystemBack(context);
+      },
       child: page,
     );
   }
@@ -690,17 +849,22 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
                   label: lang.getText('allAnnouncements'),
                   count: _announcements.length,
                   active: _activeFilter == _AnnouncementFilter.all,
-                  onTap: () =>
-                      setState(() => _activeFilter = _AnnouncementFilter.all),
+                  onTap: () {
+                    setState(() => _activeFilter = _AnnouncementFilter.all);
+                    _loadAnnouncements();
+                  },
                   palette: palette,
                 ),
                 _filterTab(
                   label: lang.getText('scheduled'),
                   count: _scheduledCount,
                   active: _activeFilter == _AnnouncementFilter.scheduled,
-                  onTap: () => setState(
-                    () => _activeFilter = _AnnouncementFilter.scheduled,
-                  ),
+                  onTap: () {
+                    setState(
+                      () => _activeFilter = _AnnouncementFilter.scheduled,
+                    );
+                    _loadAnnouncements();
+                  },
                   palette: palette,
                 ),
               ],
@@ -727,6 +891,10 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
           },
         ),
         const SizedBox(height: 20),
+        if (_errorMessage != null) ...[
+          _errorBanner(palette, _errorMessage!),
+          const SizedBox(height: 14),
+        ],
         if (fillHeight)
           Expanded(child: _announcementsListPanel(palette))
         else
@@ -744,121 +912,165 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Expanded(
-            child: ListView.separated(
-              itemCount: _filteredAnnouncements.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 14),
-              itemBuilder: (context, index) {
-                final entry = _filteredAnnouncements[index];
-                final badge = _priorityStyle(entry.model.priority, palette);
-                final icon = _visualStyle(entry.visual, palette);
+          if (_isLoading)
+            Expanded(
+              child: Center(
+                child: CircularProgressIndicator(color: palette.accent),
+              ),
+            )
+          else if (_filteredAnnouncements.isEmpty)
+            Expanded(
+              child: Center(
+                child: Text(
+                  'No announcements found',
+                  style: TextStyle(color: palette.textMuted),
+                ),
+              ),
+            )
+          else
+            Expanded(
+              child: ListView.separated(
+                itemCount: _filteredAnnouncements.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 14),
+                itemBuilder: (context, index) {
+                  final entry = _filteredAnnouncements[index];
+                  final badge = _priorityStyle(entry.model.priority, palette);
+                  final icon = _visualStyle(entry.visual, palette);
 
-                return InkWell(
-                  onTap: () => _openAnnouncementActions(entry),
-                  borderRadius: BorderRadius.circular(18),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 180),
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.white.withValues(alpha: 0.035),
-                      borderRadius: BorderRadius.circular(18),
-                      border: Border.all(color: palette.borderSoft),
-                      boxShadow: [
-                        BoxShadow(
-                          color: palette.glow.withValues(alpha: 0.04),
-                          blurRadius: 6,
-                        ),
-                      ],
-                    ),
-                    child: Row(
-                      children: [
-                        Container(
-                          width: 58,
-                          height: 58,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            gradient: RadialGradient(
-                              colors: [
-                                icon.color.withValues(alpha: 0.24),
-                                icon.color.withValues(alpha: 0.08),
+                  return InkWell(
+                    onTap: () => _openAnnouncementActions(entry),
+                    borderRadius: BorderRadius.circular(18),
+                    child: AnimatedContainer(
+                      duration: const Duration(milliseconds: 180),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.035),
+                        borderRadius: BorderRadius.circular(18),
+                        border: Border.all(color: palette.borderSoft),
+                        boxShadow: [
+                          BoxShadow(
+                            color: palette.glow.withValues(alpha: 0.04),
+                            blurRadius: 6,
+                          ),
+                        ],
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 58,
+                            height: 58,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  icon.color.withValues(alpha: 0.24),
+                                  icon.color.withValues(alpha: 0.08),
+                                ],
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: icon.color.withValues(alpha: 0.35),
+                                  blurRadius: 22,
+                                ),
                               ],
                             ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: icon.color.withValues(alpha: 0.35),
-                                blurRadius: 22,
-                              ),
-                            ],
+                            child: Icon(icon.icon, color: icon.color, size: 28),
                           ),
-                          child: Icon(icon.icon, color: icon.color, size: 28),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _localizedAnnouncementTitle(entry),
+                                  style: TextStyle(
+                                    color: palette.textPrimary,
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 15,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                  _localizedAnnouncementMessage(entry),
+                                  style: TextStyle(
+                                    color: palette.textMuted,
+                                    height: 1.5,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 14),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.end,
                             children: [
-                              Text(
-                                _localizedAnnouncementTitle(entry),
-                                style: TextStyle(
-                                  color: palette.textPrimary,
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 15,
+                              Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 6,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: badge.background,
+                                  borderRadius: BorderRadius.circular(999),
+                                ),
+                                child: Text(
+                                  _localizedPriority(entry.model.priority),
+                                  style: TextStyle(
+                                    color: badge.foreground,
+                                    fontWeight: FontWeight.w700,
+                                  ),
                                 ),
                               ),
-                              const SizedBox(height: 8),
+                              const SizedBox(height: 12),
                               Text(
-                                _localizedAnnouncementMessage(entry),
+                                _timeAgo(entry.model.timestamp),
                                 style: TextStyle(
                                   color: palette.textMuted,
-                                  height: 1.5,
+                                  fontSize: 12,
                                 ),
                               ),
                             ],
                           ),
-                        ),
-                        const SizedBox(width: 14),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.end,
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 10,
-                                vertical: 6,
-                              ),
-                              decoration: BoxDecoration(
-                                color: badge.background,
-                                borderRadius: BorderRadius.circular(999),
-                              ),
-                              child: Text(
-                                _localizedPriority(entry.model.priority),
-                                style: TextStyle(
-                                  color: badge.foreground,
-                                  fontWeight: FontWeight.w700,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 12),
-                            Text(
-                              _timeAgo(entry.model.timestamp),
-                              style: TextStyle(
-                                color: palette.textMuted,
-                                fontSize: 12,
-                              ),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(width: 12),
-                        Icon(
-                          Icons.chevron_right_rounded,
-                          color: palette.textMuted,
-                          size: 28,
-                        ),
-                      ],
+                          const SizedBox(width: 12),
+                          Icon(
+                            Icons.chevron_right_rounded,
+                            color: palette.textMuted,
+                            size: 28,
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
+        ],
+      ),
+    );
+  }
+
+  Widget _errorBanner(_AnnouncementsPalette palette, String message) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: palette.danger.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: palette.danger.withValues(alpha: 0.35)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.error_outline_rounded, color: palette.danger, size: 20),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              message,
+              style: TextStyle(color: palette.textPrimary),
+            ),
+          ),
+          TextButton.icon(
+            onPressed: _loadAnnouncements,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            label: const Text('Retry'),
           ),
         ],
       ),
@@ -1029,9 +1241,17 @@ class _AnnouncementsPageState extends State<AnnouncementsPage> {
                 width: double.infinity,
                 height: 54,
                 child: ElevatedButton.icon(
-                  onPressed: _sendAnnouncement,
-                  icon: const Icon(Icons.send_rounded),
-                  label: Text(lang.getText('sendAnnouncement')),
+                  onPressed: _isSaving ? null : _sendAnnouncement,
+                  icon: _isSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.send_rounded),
+                  label: Text(
+                    _isSaving ? 'Sending...' : lang.getText('sendAnnouncement'),
+                  ),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: palette.primary,
                     foregroundColor: Colors.white,

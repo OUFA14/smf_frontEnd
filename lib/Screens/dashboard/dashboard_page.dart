@@ -7,10 +7,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import '../../data/mock_monitoring_data.dart';
+import '../../models/event_log.dart';
 import '../../models/user.dart';
 import '../../providers/language_provider.dart';
-import '../../services/auth_service.dart';
+import '../../services/events_service.dart';
 import '../../services/smf_devices_service.dart';
 import '../../services/users_service.dart';
 import '../../theme/app_theme.dart';
@@ -45,10 +45,9 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage>
     with TickerProviderStateMixin {
   static const _profileImageKey = 'profile_image_url';
-  static const _profileDisplayNameKey = 'profile_display_name';
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   _DashboardTab _selectedTab = _DashboardTab.dashboard;
-  late final List<_AlertRecord> _alerts;
+  final List<_AlertRecord> _alerts = <_AlertRecord>[];
   late final AnimationController _livePulse;
   late final AnimationController _badgePulse;
   StreamSubscription<String>? _dashboardHistorySubscription;
@@ -56,9 +55,9 @@ class _DashboardPageState extends State<DashboardPage>
   final Set<int> _readNotificationIndexes = <int>{};
   final UsersService _usersService = UsersService();
   final SmfDevicesService _smfDevicesService = SmfDevicesService();
+  final EventsService _eventsService = EventsService();
   User? _currentUser;
   String? _profileImageUrl;
-  String? _profileDisplayName;
   int? _onlineUserCount;
   int? _smfDeviceCount;
   int? _registeredSmfDeviceCount;
@@ -76,18 +75,6 @@ class _DashboardPageState extends State<DashboardPage>
     DashboardHistory.replace(_slugForTab(_selectedTab));
     _dashboardHistorySubscription =
         DashboardHistory.changes.listen(_restoreDashboardTabFromHistory);
-    _alerts = MockMonitoringData.alerts
-        .map(
-          (item) => _AlertRecord(
-            title: item.title,
-            description: item.zone,
-            severity: _normalizeSeverity(item.severity),
-            status: item.status,
-            timeLabel: item.timeLabel,
-          ),
-        )
-        .toList();
-
     _livePulse = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1400),
@@ -100,9 +87,91 @@ class _DashboardPageState extends State<DashboardPage>
 
     _loadCurrentUser();
     _loadProfileImage();
-    _loadProfileDisplayName();
+    _loadAlertsFromEvents();
     _loadOnlineUserCount();
     _loadSmfDeviceCount();
+  }
+
+  Future<void> _loadAlertsFromEvents() async {
+    try {
+      final events = await _eventsService.getEvents(since: 3600 * 24 * 7);
+      final mapped = events
+          .where((event) => _eventLooksLikeAlert(event))
+          .map(_alertFromEvent)
+          .toList();
+      if (!mounted) return;
+      setState(() {
+        _alerts
+          ..clear()
+          ..addAll(mapped);
+        _selectedAlertIndex = 0;
+        _alertsCurrentPage = 1;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _alerts.clear());
+    }
+  }
+
+  bool _eventLooksLikeAlert(EventLog event) {
+    final normalized = event.eventType.toLowerCase();
+    return normalized.contains('alert') ||
+        normalized.contains('sos') ||
+        normalized.contains('breach') ||
+        normalized.contains('violation') ||
+        normalized.contains('unauthorized') ||
+        normalized.contains('offline');
+  }
+
+  _AlertRecord _alertFromEvent(EventLog event) {
+    final eventType =
+        event.eventType.isEmpty ? 'Security event' : event.eventType;
+    final title = event.message ?? _titleFromEventType(eventType);
+    final description = event.zoneName ??
+        (event.macAddress.isNotEmpty ? event.macAddress : 'SMF event stream');
+    return _AlertRecord(
+      title: title,
+      description: description,
+      severity: _severityFromEvent(eventType),
+      status: 'Open',
+      timeLabel: _relativeEventTime(event.createdAt),
+    );
+  }
+
+  String _titleFromEventType(String eventType) {
+    final cleaned = eventType
+        .replaceAll(RegExp(r'[_-]+'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (cleaned.isEmpty) return 'Security event';
+    return cleaned
+        .split(' ')
+        .map((word) => word.isEmpty
+            ? word
+            : '${word[0].toUpperCase()}${word.substring(1).toLowerCase()}')
+        .join(' ');
+  }
+
+  String _severityFromEvent(String eventType) {
+    final normalized = eventType.toLowerCase();
+    if (normalized.contains('sos') ||
+        normalized.contains('breach') ||
+        normalized.contains('unauthorized')) {
+      return 'High';
+    }
+    if (normalized.contains('offline') || normalized.contains('violation')) {
+      return 'Medium';
+    }
+    return 'Low';
+  }
+
+  String _relativeEventTime(DateTime? createdAt) {
+    if (createdAt == null) return 'Just now';
+    final diff = DateTime.now().difference(createdAt.toLocal());
+    if (diff.inMinutes < 1) return 'Just now';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} min ago';
+    if (diff.inHours < 24) return '${diff.inHours} h';
+    return '${diff.inDays} d';
   }
 
   Future<void> _loadProfileImage() async {
@@ -111,33 +180,14 @@ class _DashboardPageState extends State<DashboardPage>
     setState(() => _profileImageUrl = prefs.getString(_profileImageKey));
   }
 
-  Future<void> _loadProfileDisplayName() async {
-    final prefs = await SharedPreferences.getInstance();
-    if (!mounted) return;
-    setState(() => _profileDisplayName = prefs.getString(_profileDisplayNameKey));
-  }
-
   Future<void> _loadCurrentUser() async {
-    final userId = AuthService.instance.userId;
-    if (userId == null || userId.isEmpty) {
-      return;
-    }
-
     try {
-      final user = await _usersService.getUser(userId);
+      final user = await _usersService.getCurrentUser();
       if (!mounted) return;
       setState(() => _currentUser = user);
     } catch (_) {
       if (!mounted) return;
-      setState(() {
-        _currentUser = const User(
-          id: '',
-          name: 'Admin User',
-          email: 'admin@smf.com',
-          role: 'ADMIN',
-          roles: ['ADMIN'],
-        );
-      });
+      setState(() => _currentUser = null);
     }
   }
 
@@ -270,17 +320,6 @@ class _DashboardPageState extends State<DashboardPage>
       return false;
     }
     return true;
-  }
-
-  String _normalizeSeverity(String value) {
-    final normalized = value.toLowerCase();
-    if (normalized.contains('critical') || normalized.contains('high')) {
-      return 'High';
-    }
-    if (normalized.contains('warn') || normalized.contains('medium')) {
-      return 'Medium';
-    }
-    return 'Low';
   }
 
   String _greeting(LanguageProvider languageProvider) {
@@ -592,7 +631,9 @@ class _DashboardPageState extends State<DashboardPage>
   String _localizedLocation(_AlertRecord alert) {
     final lang = context.read<LanguageProvider>();
     final source = _alertSource(alert);
-    if (source == 'Access Control') return lang.getText('mainEntranceBuildingA');
+    if (source == 'Access Control') {
+      return lang.getText('mainEntranceBuildingA');
+    }
     if (source == 'Device Monitor') return lang.getText('eastFenceCorridor');
     if (source == 'System') return lang.getText('operationsLobby');
     return _alertLocation(alert);
@@ -700,140 +741,144 @@ class _DashboardPageState extends State<DashboardPage>
     final isDesktop = width >= 1280;
     final isTablet = width >= 760;
 
-    return WillPopScope(
-      onWillPop: _handleDashboardSystemBack,
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (didPop) return;
+        _handleDashboardSystemBack();
+      },
       child: Directionality(
         textDirection:
             languageProvider.isArabic ? TextDirection.rtl : TextDirection.ltr,
         child: Scaffold(
-        key: _scaffoldKey,
-        backgroundColor: palette.pageBackground,
-        drawer: isDesktop
-            ? null
-            : Drawer(
-                backgroundColor: Colors.transparent,
-                elevation: 0,
-                child: _buildSidebar(
-                  context: context,
-                  palette: palette,
-                  isDark: isDark,
-                  languageProvider: languageProvider,
+          key: _scaffoldKey,
+          backgroundColor: palette.pageBackground,
+          drawer: isDesktop
+              ? null
+              : Drawer(
+                  backgroundColor: Colors.transparent,
+                  elevation: 0,
+                  child: _buildSidebar(
+                    context: context,
+                    palette: palette,
+                    isDark: isDark,
+                    languageProvider: languageProvider,
+                  ),
                 ),
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [palette.pageBackground, palette.pageBackgroundEnd],
               ),
-        body: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [palette.pageBackground, palette.pageBackgroundEnd],
             ),
-          ),
-          child: Stack(
-            children: [
-              Positioned.fill(
-                child: IgnorePointer(
-                  child: Stack(
-                    children: [
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: RadialGradient(
-                            center: const Alignment(0.94, -0.92),
-                            radius: 0.5,
-                            colors: [palette.glowColor, Colors.transparent],
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Stack(
+                      children: [
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: RadialGradient(
+                              center: const Alignment(0.94, -0.92),
+                              radius: 0.5,
+                              colors: [palette.glowColor, Colors.transparent],
+                            ),
                           ),
                         ),
+                        DecoratedBox(
+                          decoration: BoxDecoration(
+                            gradient: RadialGradient(
+                              center: const Alignment(-0.92, 0.98),
+                              radius: 0.58,
+                              colors: [
+                                palette.glowColorSecondary,
+                                Colors.transparent,
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+                Positioned(
+                  top: -120,
+                  right: -80,
+                  child: IgnorePointer(
+                    child: Container(
+                      width: 340,
+                      height: 340,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        gradient: RadialGradient(
+                          colors: [
+                            palette.glowColor,
+                            Colors.transparent,
+                          ],
+                        ),
                       ),
-                      DecoratedBox(
-                        decoration: BoxDecoration(
-                          gradient: RadialGradient(
-                            center: const Alignment(-0.92, 0.98),
-                            radius: 0.58,
-                            colors: [
-                              palette.glowColorSecondary,
-                              Colors.transparent,
-                            ],
+                    ),
+                  ),
+                ),
+                SafeArea(
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (isDesktop)
+                        _buildSidebar(
+                          context: context,
+                          palette: palette,
+                          isDark: isDark,
+                          languageProvider: languageProvider,
+                        ),
+                      Expanded(
+                        child: Padding(
+                          padding: EdgeInsets.fromLTRB(
+                            isDesktop ? 0 : 12,
+                            isDesktop ? 12 : 68,
+                            12,
+                            12,
+                          ),
+                          child: _buildTabContent(
+                            context: context,
+                            palette: palette,
+                            isDark: isDark,
+                            isDesktop: isDesktop,
+                            isTablet: isTablet,
+                            languageProvider: languageProvider,
+                            themeProvider: themeProvider,
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
-              ),
-              Positioned(
-                top: -120,
-                right: -80,
-                child: IgnorePointer(
-                  child: Container(
-                    width: 340,
-                    height: 340,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: RadialGradient(
-                        colors: [
-                          palette.glowColor,
-                          Colors.transparent,
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              SafeArea(
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    if (isDesktop)
-                      _buildSidebar(
-                        context: context,
-                        palette: palette,
-                        isDark: isDark,
-                        languageProvider: languageProvider,
-                      ),
-                    Expanded(
+                if (!isDesktop)
+                  Positioned(
+                    top: 0,
+                    left: 0,
+                    child: SafeArea(
                       child: Padding(
-                        padding: EdgeInsets.fromLTRB(
-                          isDesktop ? 0 : 12,
-                          isDesktop ? 12 : 68,
-                          12,
-                          12,
-                        ),
-                        child: _buildTabContent(
-                          context: context,
-                          palette: palette,
-                          isDark: isDark,
-                          isDesktop: isDesktop,
-                          isTablet: isTablet,
-                          languageProvider: languageProvider,
-                          themeProvider: themeProvider,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              if (!isDesktop)
-                Positioned(
-                  top: 0,
-                  left: 0,
-                  child: SafeArea(
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 12, top: 8),
-                      child: IconButton(
-                        tooltip: languageProvider.getText('menu'),
-                        onPressed: () =>
-                            _scaffoldKey.currentState?.openDrawer(),
-                        icon: Icon(
-                          Icons.menu_rounded,
-                          color: palette.textPrimary,
+                        padding: const EdgeInsets.only(left: 12, top: 8),
+                        child: IconButton(
+                          tooltip: languageProvider.getText('menu'),
+                          onPressed: () =>
+                              _scaffoldKey.currentState?.openDrawer(),
+                          icon: Icon(
+                            Icons.menu_rounded,
+                            color: palette.textPrimary,
+                          ),
                         ),
                       ),
                     ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -847,10 +892,10 @@ class _DashboardPageState extends State<DashboardPage>
     final user = _currentUser ??
         const User(
           id: '',
-          name: 'Admin User',
+          name: '',
           email: '',
-          role: 'ADMIN',
-          roles: ['ADMIN'],
+          role: 'USER',
+          roles: ['USER'],
         );
 
     return Container(
@@ -998,7 +1043,6 @@ class _DashboardPageState extends State<DashboardPage>
                       onTap: () {
                         Navigator.pushNamed(context, '/profile').then((_) {
                           _loadProfileImage();
-                          _loadProfileDisplayName();
                         });
                       },
                       child: Container(
@@ -1471,10 +1515,10 @@ class _DashboardPageState extends State<DashboardPage>
                                 text: _displayName(_currentUser ??
                                     const User(
                                       id: '',
-                                      name: 'Admin User',
+                                      name: '',
                                       email: '',
-                                      role: 'ADMIN',
-                                      roles: ['ADMIN'],
+                                      role: 'USER',
+                                      roles: ['USER'],
                                     )),
                                 style: TextStyle(
                                   color: palette.heroHighlight,
@@ -1527,8 +1571,6 @@ class _DashboardPageState extends State<DashboardPage>
   }
 
   String _displayName(User user) {
-    final savedName = _profileDisplayName?.trim();
-    if (savedName != null && savedName.isNotEmpty) return savedName;
     final name = user.name.trim();
     if (name.isNotEmpty) return name;
     final email = user.email.trim();
@@ -1544,10 +1586,10 @@ class _DashboardPageState extends State<DashboardPage>
         .where((role) => role.trim().isNotEmpty)
         .map((role) => role.replaceFirst(RegExp(r'^ROLE_'), ''))
         .toList();
-    if (roles.any((role) => role.toUpperCase() == 'ADMIN')) return 'ADMIN';
     final role = (user.role ?? '').trim().replaceFirst(RegExp(r'^ROLE_'), '');
     if (role.isNotEmpty) return role.toUpperCase();
-    return 'System User';
+    if (roles.isNotEmpty) return roles.first.toUpperCase();
+    return 'USER';
   }
 
   Widget _heroAccentRule(_DashboardPalette palette) {
@@ -1687,7 +1729,8 @@ class _DashboardPageState extends State<DashboardPage>
                               height: 48,
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                color: palette.primaryBlue.withValues(alpha: 0.14),
+                                color:
+                                    palette.primaryBlue.withValues(alpha: 0.14),
                               ),
                               child: Icon(
                                 Icons.notifications_active_rounded,
@@ -1837,7 +1880,8 @@ class _DashboardPageState extends State<DashboardPage>
                                             height: 42,
                                             decoration: BoxDecoration(
                                               shape: BoxShape.circle,
-                                              color: accent.withValues(alpha: 0.16),
+                                              color: accent.withValues(
+                                                  alpha: 0.16),
                                             ),
                                             child: Icon(
                                               Icons.campaign_rounded,
@@ -2662,8 +2706,9 @@ class _DashboardPageState extends State<DashboardPage>
               )
             : Flex(
                 direction: compact ? Axis.vertical : Axis.horizontal,
-                crossAxisAlignment:
-                    compact ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+                crossAxisAlignment: compact
+                    ? CrossAxisAlignment.start
+                    : CrossAxisAlignment.center,
                 children: [
                   Container(
                     width: iconSize,
@@ -3302,10 +3347,8 @@ class _DashboardPageState extends State<DashboardPage>
               ),
             )
           else
-            ...visibleAlerts
-                .map((alert) =>
-                    _buildAlertListRowForPanel(palette, compact)(alert))
-                ,
+            ...visibleAlerts.map(
+                (alert) => _buildAlertListRowForPanel(palette, compact)(alert)),
           if (alerts.isNotEmpty) ...[
             const SizedBox(height: 14),
             Row(
@@ -3394,8 +3437,8 @@ class _DashboardPageState extends State<DashboardPage>
               ),
               boxShadow: [
                 BoxShadow(
-                  color:
-                      palette.cardShadow.withValues(alpha: isSelected ? 0.22 : 0.15),
+                  color: palette.cardShadow
+                      .withValues(alpha: isSelected ? 0.22 : 0.15),
                   blurRadius: isSelected ? 25 : 18,
                   offset: const Offset(0, 10),
                 ),
@@ -3466,7 +3509,8 @@ class _DashboardPageState extends State<DashboardPage>
                         runSpacing: 10,
                         crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          _pill(_localizedSeverity(alert.severity), severityColor),
+                          _pill(_localizedSeverity(alert.severity),
+                              severityColor),
                           _pill(_localizedStatus(alert.status), statusColor),
                           _detailMetaChip(
                             palette: palette,
@@ -3535,7 +3579,8 @@ class _DashboardPageState extends State<DashboardPage>
                       ),
                       Expanded(
                         flex: 12,
-                        child: _pill(_localizedSeverity(alert.severity), severityColor),
+                        child: _pill(
+                            _localizedSeverity(alert.severity), severityColor),
                       ),
                       Expanded(
                         flex: 16,
@@ -3581,7 +3626,8 @@ class _DashboardPageState extends State<DashboardPage>
                       ),
                       Expanded(
                         flex: 12,
-                        child: _pill(_localizedStatus(alert.status), statusColor),
+                        child:
+                            _pill(_localizedStatus(alert.status), statusColor),
                       ),
                       Expanded(
                         flex: 6,
@@ -3743,7 +3789,8 @@ class _DashboardPageState extends State<DashboardPage>
                         severityColor.withValues(alpha: 0.08),
                       ],
                     ),
-                    border: Border.all(color: severityColor.withValues(alpha: 0.5)),
+                    border:
+                        Border.all(color: severityColor.withValues(alpha: 0.5)),
                   ),
                   child: Icon(
                     _alertSeverityIcon(alert.severity),
@@ -3823,7 +3870,8 @@ class _DashboardPageState extends State<DashboardPage>
           _detailRow(
             palette: palette,
             label: lang.getText('severity'),
-            valueWidget: _pill(_localizedSeverity(alert.severity), severityColor),
+            valueWidget:
+                _pill(_localizedSeverity(alert.severity), severityColor),
           ),
           _detailRow(
             palette: palette,
@@ -3870,7 +3918,8 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    side: BorderSide(color: palette.warning.withValues(alpha: 0.7)),
+                    side: BorderSide(
+                        color: palette.warning.withValues(alpha: 0.7)),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -3889,7 +3938,8 @@ class _DashboardPageState extends State<DashboardPage>
                   ),
                   style: OutlinedButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
-                    side: BorderSide(color: palette.success.withValues(alpha: 0.7)),
+                    side: BorderSide(
+                        color: palette.success.withValues(alpha: 0.7)),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
@@ -3976,7 +4026,9 @@ class _DashboardPageState extends State<DashboardPage>
             borderRadius: BorderRadius.circular(24),
           ),
           title: Text(
-            index == null ? lang.getText('addAlert') : lang.getText('editAlert'),
+            index == null
+                ? lang.getText('addAlert')
+                : lang.getText('editAlert'),
             style: TextStyle(color: palette.textPrimary),
           ),
           content: StatefulBuilder(
@@ -3994,8 +4046,8 @@ class _DashboardPageState extends State<DashboardPage>
                     const SizedBox(height: 12),
                     TextField(
                       controller: descriptionController,
-                      decoration:
-                          InputDecoration(labelText: lang.getText('description')),
+                      decoration: InputDecoration(
+                          labelText: lang.getText('description')),
                     ),
                     const SizedBox(height: 12),
                     DropdownButtonFormField<String>(
@@ -4078,7 +4130,8 @@ class _DashboardPageState extends State<DashboardPage>
                 backgroundColor: palette.primaryBlue,
                 foregroundColor: Colors.white,
               ),
-              child: Text(index == null ? lang.getText('add') : lang.getText('save')),
+              child: Text(
+                  index == null ? lang.getText('add') : lang.getText('save')),
             ),
           ],
         );
