@@ -414,19 +414,30 @@ class _UsersManagementPageState extends State<UsersManagementPage> {
   }
 
   Future<void> _editWorkerProfile(User user) async {
+    WorkerProfile? worker;
     try {
-      final worker = await _workersService.getWorker(user.id);
+      worker = await _workersService.getWorker(user.id);
       FrontendReportSnapshot.instance.cacheWorkerProfile(user.id, worker);
+    } on ApiException catch (_) {
+      worker = null;
+    }
+
+    try {
       if (!mounted) return;
       final updated = await _showWorkerProfileEditDialog(
         context,
         user: user,
         worker: worker,
         onSubmit: (fields) async {
-          final updated = await _workersService.updateWorker(
-            id: user.id,
-            fields: fields,
-          );
+          final updated = worker == null
+              ? await _workersService.createWorker(
+                  userId: user.id,
+                  fields: fields,
+                )
+              : await _workersService.updateWorker(
+                  id: user.id,
+                  fields: fields,
+                );
           FrontendReportSnapshot.instance.cacheWorkerProfile(user.id, updated);
         },
       );
@@ -1116,36 +1127,38 @@ Future<bool?> _showWorkerUserFormDialog(
 Future<bool?> _showWorkerProfileEditDialog(
   BuildContext context, {
   required User user,
-  required WorkerProfile worker,
+  required WorkerProfile? worker,
   required Future<void> Function(Map<String, String> fields) onSubmit,
 }) async {
   final lang = context.read<LanguageProvider>();
   final formKey = GlobalKey<FormState>();
   final fields = {
-    'full_name_ar': TextEditingController(text: worker.fullNameAr),
-    'full_name_en': TextEditingController(text: worker.fullNameEn),
-    'date_of_birth':
-        TextEditingController(text: _displayDate(worker.dateOfBirth)),
-    'address_ar': TextEditingController(text: worker.addressAr),
-    'address_en': TextEditingController(text: worker.addressEn),
-    'phone': TextEditingController(text: worker.phone),
-    'role_ar': TextEditingController(text: worker.roleAr),
-    'role_en': TextEditingController(text: worker.roleEn),
-    'company_ar': TextEditingController(text: worker.companyAr),
-    'company_en': TextEditingController(text: worker.companyEn),
-    'work_location_ar': TextEditingController(text: worker.workLocationAr),
-    'work_location_en': TextEditingController(text: worker.workLocationEn),
+    'full_name_ar': TextEditingController(text: worker?.fullNameAr ?? ''),
+    'full_name_en': TextEditingController(text: worker?.fullNameEn ?? ''),
+    'date_of_birth': TextEditingController(
+        text: worker?.dateOfBirth == null
+            ? ''
+            : '${worker!.dateOfBirth!.year}-${worker.dateOfBirth!.month.toString().padLeft(2, '0')}-${worker.dateOfBirth!.day.toString().padLeft(2, '0')}'),
+    'address_ar': TextEditingController(text: worker?.addressAr ?? ''),
+    'address_en': TextEditingController(text: worker?.addressEn ?? ''),
+    'phone': TextEditingController(text: worker?.phone ?? ''),
+    'role_ar': TextEditingController(text: worker?.roleAr ?? ''),
+    'role_en': TextEditingController(text: worker?.roleEn ?? ''),
+    'company_ar': TextEditingController(text: worker?.companyAr ?? ''),
+    'company_en': TextEditingController(text: worker?.companyEn ?? ''),
+    'work_location_ar': TextEditingController(text: worker?.workLocationAr ?? ''),
+    'work_location_en': TextEditingController(text: worker?.workLocationEn ?? ''),
     'medical_condition_ar':
-        TextEditingController(text: worker.medicalConditionAr),
+        TextEditingController(text: worker?.medicalConditionAr ?? ''),
     'medical_condition_en':
-        TextEditingController(text: worker.medicalConditionEn),
-    'clinical_notes_ar': TextEditingController(text: worker.clinicalNotesAr),
-    'clinical_notes_en': TextEditingController(text: worker.clinicalNotesEn),
+        TextEditingController(text: worker?.medicalConditionEn ?? ''),
+    'clinical_notes_ar': TextEditingController(text: worker?.clinicalNotesAr ?? ''),
+    'clinical_notes_en': TextEditingController(text: worker?.clinicalNotesEn ?? ''),
     'emergency_contact_name':
-        TextEditingController(text: worker.emergencyContactName),
+        TextEditingController(text: worker?.emergencyContactName ?? ''),
     'emergency_contact_relation':
-        TextEditingController(text: worker.emergencyContactRelation),
-    'emergency_phone': TextEditingController(text: worker.emergencyPhone),
+        TextEditingController(text: worker?.emergencyContactRelation ?? ''),
+    'emergency_phone': TextEditingController(text: worker?.emergencyPhone ?? ''),
   };
   var tabIndex = 0;
   var isSaving = false;
