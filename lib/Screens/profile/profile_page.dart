@@ -283,7 +283,7 @@ class _ProfilePageState extends State<ProfilePage> {
   void _openProfileEditor() {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const PersonalInfoPage()),
+      MaterialPageRoute(builder: (_) => const PersonalInfoPage(initialEditMode: true)),
     ).then((_) {
       _loadCurrentUser();
       _loadProfileDisplayName();

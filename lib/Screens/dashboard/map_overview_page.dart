@@ -323,14 +323,14 @@ class _MapOverviewPageState extends State<MapOverviewPage> {
         .toList();
   }
 
-  List<_MapWorkerPlacement> _workerPlacementsForMap() {
-    final placements = <_MapWorkerPlacement>[];
+  List<MapWorkerPlacement> _workerPlacementsForMap() {
+    final placements = <MapWorkerPlacement>[];
     for (var zoneIndex = 0; zoneIndex < _viewZones.length; zoneIndex++) {
       final zone = _viewZones[zoneIndex];
       final workers = _workersForSingleZone(zone);
       for (var workerIndex = 0; workerIndex < workers.length; workerIndex++) {
         placements.add(
-          _MapWorkerPlacement(
+          MapWorkerPlacement(
             zone: zone,
             worker: workers[workerIndex],
             zoneIndex: zoneIndex,
@@ -624,8 +624,8 @@ class _MapOverviewPageState extends State<MapOverviewPage> {
 
     return Column(
       children: [
-        _SingleZoneBuildingMonitor(
-          palette: palette,
+        CampusMapMonitor(
+          palette: CampusMapPalette.fromBrightness(Brightness.dark),
           zone: selectedZone,
           zones: _viewZones,
           workers: workers,
@@ -696,14 +696,14 @@ class _MapOverviewPageState extends State<MapOverviewPage> {
   }
 }
 
-class _MapWorkerPlacement {
+class MapWorkerPlacement {
   final MapZoneViewModel zone;
   final MapWorkerMarker worker;
   final int zoneIndex;
   final int workerIndex;
   final int totalWorkersInZone;
 
-  const _MapWorkerPlacement({
+  const MapWorkerPlacement({
     required this.zone,
     required this.worker,
     required this.zoneIndex,
@@ -712,20 +712,22 @@ class _MapWorkerPlacement {
   });
 }
 
-class _SingleZoneBuildingMonitor extends StatefulWidget {
+class CampusMapMonitor extends StatefulWidget {
   final CampusMapPalette palette;
   final MapZoneViewModel zone;
   final List<MapZoneViewModel> zones;
   final List<MapWorkerMarker> workers;
-  final List<_MapWorkerPlacement> mapWorkers;
+  final List<MapWorkerPlacement> mapWorkers;
   final int deviceCount;
   final int registryCount;
   final String? selectedWorkerId;
   final String? selectedZoneId;
   final ValueChanged<MapZoneViewModel> onSelectZone;
-  final ValueChanged<_MapWorkerPlacement> onSelectWorker;
+  final ValueChanged<MapWorkerPlacement> onSelectWorker;
+  final bool showDetails;
 
-  const _SingleZoneBuildingMonitor({
+  const CampusMapMonitor({
+    super.key,
     required this.palette,
     required this.zone,
     required this.zones,
@@ -737,15 +739,16 @@ class _SingleZoneBuildingMonitor extends StatefulWidget {
     required this.selectedZoneId,
     required this.onSelectZone,
     required this.onSelectWorker,
+    this.showDetails = true,
   });
 
   @override
-  State<_SingleZoneBuildingMonitor> createState() =>
-      _SingleZoneBuildingMonitorState();
+  State<CampusMapMonitor> createState() =>
+      _CampusMapMonitorState();
 }
 
-class _SingleZoneBuildingMonitorState
-    extends State<_SingleZoneBuildingMonitor> {
+class _CampusMapMonitorState
+    extends State<CampusMapMonitor> {
   final TransformationController _transformationController =
       TransformationController();
   Offset? _debugTapOffset;
@@ -790,7 +793,6 @@ class _SingleZoneBuildingMonitorState
 
   @override
   Widget build(BuildContext context) {
-    final isDark = Theme.of(context).brightness == Brightness.dark;
     return AspectRatio(
       aspectRatio: MediaQuery.of(context).size.width >= 900 ? 1.72 : 0.92,
       child: Container(
@@ -802,7 +804,7 @@ class _SingleZoneBuildingMonitorState
             colors: [
               widget.palette.panelBackground,
               widget.palette.pageBackground,
-              isDark ? const Color(0xFF06111F) : const Color(0xFFEAF4FF),
+              const Color(0xFF06111F),
             ],
           ),
           border: Border.all(
@@ -834,33 +836,10 @@ class _SingleZoneBuildingMonitorState
                       children: [
                         Positioned.fill(
                           child: ColorFiltered(
-                            colorFilter: isDark
-                                ? const ColorFilter.mode(
-                                    Colors.transparent,
-                                    BlendMode.dst,
-                                  )
-                                : const ColorFilter.matrix([
-                                    1.18,
-                                    0,
-                                    0,
-                                    0,
-                                    18,
-                                    0,
-                                    1.18,
-                                    0,
-                                    0,
-                                    18,
-                                    0,
-                                    0,
-                                    1.18,
-                                    0,
-                                    20,
-                                    0,
-                                    0,
-                                    0,
-                                    1,
-                                    0,
-                                  ]),
+                            colorFilter: const ColorFilter.mode(
+                              Colors.transparent,
+                              BlendMode.dst,
+                            ),
                             child: Image.asset(
                               'assets/images/uni_design.png',
                               fit: BoxFit.cover,
@@ -872,25 +851,15 @@ class _SingleZoneBuildingMonitorState
                         Positioned.fill(
                           child: DecoratedBox(
                             decoration: BoxDecoration(
-                              gradient: isDark
-                                  ? RadialGradient(
-                                      center: const Alignment(0.08, -0.08),
-                                      radius: 0.92,
-                                      colors: [
-                                        Colors.transparent,
-                                        widget.palette.pageBackground
-                                            .withValues(alpha: 0.18),
-                                      ],
-                                    )
-                                  : LinearGradient(
-                                      begin: Alignment.topCenter,
-                                      end: Alignment.bottomCenter,
-                                      colors: [
-                                        Colors.white.withValues(alpha: 0.18),
-                                        widget.palette.pageBackground
-                                            .withValues(alpha: 0.30),
-                                      ],
-                                    ),
+                              gradient: RadialGradient(
+                                center: const Alignment(0.08, -0.08),
+                                radius: 0.92,
+                                colors: [
+                                  Colors.transparent,
+                                  widget.palette.pageBackground
+                                      .withValues(alpha: 0.18),
+                                ],
+                              ),
                             ),
                           ),
                         ),
@@ -990,86 +959,88 @@ class _SingleZoneBuildingMonitorState
                       ),
                     ),
                   ),
-                Positioned(
-                  right: isCompact ? 18 : 24,
-                  top: isCompact ? 18 : 24,
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: widget.palette.panelBackground
-                          .withValues(alpha: 0.65),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(
-                        color:
-                            widget.palette.panelBorder.withValues(alpha: 0.5),
-                      ),
-                      boxShadow: [
-                        BoxShadow(
+                if (widget.showDetails) ...[
+                  Positioned(
+                    right: isCompact ? 18 : 24,
+                    top: isCompact ? 18 : 24,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: widget.palette.panelBackground
+                            .withValues(alpha: 0.65),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
                           color:
-                              widget.palette.panelShadow.withValues(alpha: 0.1),
-                          blurRadius: 10,
+                              widget.palette.panelBorder.withValues(alpha: 0.5),
                         ),
-                      ],
+                        boxShadow: [
+                          BoxShadow(
+                            color:
+                                widget.palette.panelShadow.withValues(alpha: 0.1),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                      padding:
+                          const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _ZoomButton(
+                            icon: Icons.add,
+                            onPressed: () => _zoomIn(size),
+                            palette: widget.palette,
+                          ),
+                          const SizedBox(height: 4),
+                          _ZoomButton(
+                            icon: Icons.remove,
+                            onPressed: () => _zoomOut(size),
+                            palette: widget.palette,
+                          ),
+                          const SizedBox(height: 4),
+                          _ZoomButton(
+                            icon: Icons.zoom_out_map_outlined,
+                            onPressed: _resetZoom,
+                            palette: widget.palette,
+                          ),
+                        ],
+                      ),
                     ),
-                    padding:
-                        const EdgeInsets.symmetric(vertical: 4, horizontal: 4),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        _ZoomButton(
-                          icon: Icons.add,
-                          onPressed: () => _zoomIn(size),
-                          palette: widget.palette,
-                        ),
-                        const SizedBox(height: 4),
-                        _ZoomButton(
-                          icon: Icons.remove,
-                          onPressed: () => _zoomOut(size),
-                          palette: widget.palette,
-                        ),
-                        const SizedBox(height: 4),
-                        _ZoomButton(
-                          icon: Icons.zoom_out_map_outlined,
-                          onPressed: _resetZoom,
-                          palette: widget.palette,
-                        ),
-                      ],
+                  ),
+                  Positioned(
+                    left: isCompact ? 18 : 24,
+                    top: isCompact ? 18 : constraints.maxHeight * 0.30,
+                    child: _BuildingInfoCallout(
+                      palette: widget.palette,
+                      zone: widget.zone,
+                      workersCount: widget.workers.isNotEmpty
+                          ? widget.workers.length
+                          : math.max(widget.zone.workersCount, displayWorkers.length),
                     ),
                   ),
-                ),
-                Positioned(
-                  left: isCompact ? 18 : 24,
-                  top: isCompact ? 18 : constraints.maxHeight * 0.30,
-                  child: _BuildingInfoCallout(
-                    palette: widget.palette,
-                    zone: widget.zone,
-                    workersCount: widget.workers.isNotEmpty
-                        ? widget.workers.length
-                        : math.max(widget.zone.workersCount, displayWorkers.length),
+                  Positioned(
+                    right: isCompact ? 18 : 26,
+                    top: isCompact ? 104 : constraints.maxHeight * 0.34,
+                    child: _BuildingStatusCallout(
+                      palette: widget.palette,
+                      zone: widget.zone,
+                      workers: widget.workers,
+                    ),
                   ),
-                ),
-                Positioned(
-                  right: isCompact ? 18 : 26,
-                  top: isCompact ? 104 : constraints.maxHeight * 0.34,
-                  child: _BuildingStatusCallout(
-                    palette: widget.palette,
-                    zone: widget.zone,
-                    workers: widget.workers,
+                  Positioned(
+                    left: 18,
+                    right: 18,
+                    bottom: 18,
+                    child: _SingleZoneLegend(
+                      palette: widget.palette,
+                      online: widget.workers
+                          .where((item) => item.status.toLowerCase() != 'offline')
+                          .length,
+                      offline: widget.workers
+                          .where((item) => item.status.toLowerCase() == 'offline')
+                          .length,
+                    ),
                   ),
-                ),
-                Positioned(
-                  left: 18,
-                  right: 18,
-                  bottom: 18,
-                  child: _SingleZoneLegend(
-                    palette: widget.palette,
-                    online: widget.workers
-                        .where((item) => item.status.toLowerCase() != 'offline')
-                        .length,
-                    offline: widget.workers
-                        .where((item) => item.status.toLowerCase() == 'offline')
-                        .length,
-                  ),
-                ),
+                ],
               ],
             );
           },

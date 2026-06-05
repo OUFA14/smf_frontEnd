@@ -12,7 +12,7 @@
         "google_sign_in",
         "google_sign_in_web",
         "http",
-        "lucide_icons",
+        "lucide_icons_flutter",
         "provider",
         "shared_preferences"
       ],
@@ -67,13 +67,6 @@
         "google_sign_in_ios",
         "google_sign_in_platform_interface",
         "google_sign_in_web"
-      ]
-    },
-    {
-      "name": "lucide_icons",
-      "version": "0.257.0",
-      "dependencies": [
-        "flutter"
       ]
     },
     {
@@ -139,7 +132,7 @@
     },
     {
       "name": "meta",
-      "version": "1.17.0",
+      "version": "1.18.0",
       "dependencies": []
     },
     {
@@ -190,7 +183,7 @@
     },
     {
       "name": "matcher",
-      "version": "0.12.18",
+      "version": "0.12.19",
       "dependencies": [
         "async",
         "meta",
@@ -201,7 +194,7 @@
     },
     {
       "name": "test_api",
-      "version": "0.7.9",
+      "version": "0.7.11",
       "dependencies": [
         "async",
         "boolean_selector",
@@ -480,6 +473,13 @@
       "dependencies": [
         "meta",
         "path"
+      ]
+    },
+    {
+      "name": "lucide_icons_flutter",
+      "version": "3.1.14+2",
+      "dependencies": [
+        "flutter"
       ]
     }
   ],

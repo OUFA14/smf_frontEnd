@@ -8,14 +8,16 @@ import '../../services/users_service.dart';
 import '../../models/user.dart';
 
 class PersonalInfoPage extends StatefulWidget {
-  const PersonalInfoPage({super.key});
+  final bool initialEditMode;
+
+  const PersonalInfoPage({super.key, this.initialEditMode = false});
 
   @override
   State<PersonalInfoPage> createState() => _PersonalInfoPageState();
 }
 
 class _PersonalInfoPageState extends State<PersonalInfoPage> {
-  bool _isEditing = false;
+  late bool _isEditing;
   final UsersService _usersService = UsersService();
   User? _currentUser;
   bool _isLoading = true;
@@ -33,6 +35,7 @@ class _PersonalInfoPageState extends State<PersonalInfoPage> {
   @override
   void initState() {
     super.initState();
+    _isEditing = widget.initialEditMode;
     _loadCurrentUser();
   }
 
