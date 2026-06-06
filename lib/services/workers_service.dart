@@ -9,12 +9,36 @@ class WorkersService {
   final ApiService _apiService;
 
   Future<WorkerProfile> getWorker(String id) async {
-    final response = await _apiService.get(
+    final endpoints = <String>[
       '/workers/$id',
-      headers: await AuthService.instance.authHeaders(),
-    );
+      '/workers/user/$id',
+      '/workers/me',
+      '/workers/profile/$id',
+    ];
 
-    return WorkerProfile.fromJson(response.data as Map<String, dynamic>);
+    for (final endpoint in endpoints) {
+      try {
+        final response = await _apiService.get(
+          endpoint,
+          headers: await AuthService.instance.authHeaders(),
+        );
+        final data = response.data;
+        if (data is Map<String, dynamic>) {
+          return WorkerProfile.fromJson(data);
+        }
+        if (data is Map) {
+          return WorkerProfile.fromJson(Map<String, dynamic>.from(data));
+        }
+      } on ApiException catch (error) {
+        if (endpoint == endpoints.last) rethrow;
+        if (error.statusCode != null && error.statusCode! >= 400) {
+          continue;
+        }
+        rethrow;
+      }
+    }
+
+    throw const ApiException('Worker profile not found');
   }
 
   Future<WorkerProfile> createWorker({
