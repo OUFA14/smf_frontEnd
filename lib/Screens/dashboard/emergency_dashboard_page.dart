@@ -11,19 +11,9 @@ import '../../services/events_service.dart';
 import '../../services/users_service.dart';
 import '../../services/zones_service.dart';
 import '../../theme/app_theme.dart';
-import '../../data/map_zone_mapper.dart';
-import '../../models/map_zone_view_model.dart';
-import '../../models/zone_summary.dart';
-import '../../widgets/campus_map_canvas.dart';
-import 'map_overview_page.dart';
 
 class EmergencyDashboardPage extends StatefulWidget {
-  final VoidCallback? onViewFullMap;
-
-  const EmergencyDashboardPage({
-    super.key,
-    this.onViewFullMap,
-  });
+  const EmergencyDashboardPage({super.key});
 
   @override
   State<EmergencyDashboardPage> createState() => _EmergencyDashboardPageState();
@@ -41,9 +31,6 @@ class _EmergencyDashboardPageState extends State<EmergencyDashboardPage>
   List<User> _users = const [];
   int _zoneCount = 1;
   bool _loadedApiData = false;
-  List<MapZoneViewModel> _viewZones = const [];
-  String? _selectedZoneId;
-  String? _selectedWorkerId;
 
   @override
   void initState() {
@@ -70,27 +57,11 @@ class _EmergencyDashboardPageState extends State<EmergencyDashboardPage>
         _zonesService.getZones(),
       ]);
       if (!mounted) return;
-      final rawZones = results[3] as List<ZoneSummary>;
-      final mapped = const MapZoneMapper()
-          .build(
-            zones: rawZones,
-            users: results[2] as List<User>,
-            devices: results[1] as List<DeviceRecord>,
-            events: results[0] as List<EventLog>,
-            brightness: Brightness.dark,
-          )
-          .take(3)
-          .toList();
-
       setState(() {
         _events = results[0] as List<EventLog>;
         _devices = results[1] as List<DeviceRecord>;
         _users = results[2] as List<User>;
-        _zoneCount = rawZones.length;
-        _viewZones = mapped;
-        if (_selectedZoneId == null && mapped.isNotEmpty) {
-          _selectedZoneId = mapped.first.id;
-        }
+        _zoneCount = (results[3] as List).length;
         _loadedApiData = true;
       });
     } catch (_) {
@@ -126,12 +97,6 @@ class _EmergencyDashboardPageState extends State<EmergencyDashboardPage>
                     users: _users,
                     zoneCount: _zoneCount,
                     loadedApiData: _loadedApiData,
-                    onViewFullMap: widget.onViewFullMap,
-                    viewZones: _viewZones,
-                    selectedZoneId: _selectedZoneId,
-                    selectedWorkerId: _selectedWorkerId,
-                    onSelectZone: (zone) => setState(() => _selectedZoneId = zone.id),
-                    onSelectWorker: (placement) => setState(() => _selectedWorkerId = placement.worker.id),
                   )
                 : _DesktopEmergencyBody(
                     palette: palette,
@@ -141,12 +106,6 @@ class _EmergencyDashboardPageState extends State<EmergencyDashboardPage>
                     users: _users,
                     zoneCount: _zoneCount,
                     loadedApiData: _loadedApiData,
-                    onViewFullMap: widget.onViewFullMap,
-                    viewZones: _viewZones,
-                    selectedZoneId: _selectedZoneId,
-                    selectedWorkerId: _selectedWorkerId,
-                    onSelectZone: (zone) => setState(() => _selectedZoneId = zone.id),
-                    onSelectWorker: (placement) => setState(() => _selectedWorkerId = placement.worker.id),
                   ),
           );
         },
@@ -163,12 +122,6 @@ class _DesktopEmergencyBody extends StatelessWidget {
   final List<User> users;
   final int zoneCount;
   final bool loadedApiData;
-  final VoidCallback? onViewFullMap;
-  final List<MapZoneViewModel> viewZones;
-  final String? selectedZoneId;
-  final String? selectedWorkerId;
-  final ValueChanged<MapZoneViewModel> onSelectZone;
-  final ValueChanged<MapWorkerPlacement> onSelectWorker;
 
   const _DesktopEmergencyBody({
     required this.palette,
@@ -178,12 +131,6 @@ class _DesktopEmergencyBody extends StatelessWidget {
     required this.users,
     required this.zoneCount,
     required this.loadedApiData,
-    this.onViewFullMap,
-    required this.viewZones,
-    required this.selectedZoneId,
-    required this.selectedWorkerId,
-    required this.onSelectZone,
-    required this.onSelectWorker,
   });
 
   @override
@@ -212,15 +159,7 @@ class _DesktopEmergencyBody extends StatelessWidget {
                   children: [
                     SizedBox(
                       height: 280,
-                      child: _LiveMapCard(
-                        palette: palette,
-                        onViewFullMap: onViewFullMap,
-                        viewZones: viewZones,
-                        selectedZoneId: selectedZoneId,
-                        selectedWorkerId: selectedWorkerId,
-                        onSelectZone: onSelectZone,
-                        onSelectWorker: onSelectWorker,
-                      ),
+                      child: _LiveMapCard(palette: palette),
                     ),
                     const SizedBox(height: 18),
                     Row(
@@ -294,12 +233,6 @@ class _CompactEmergencyBody extends StatelessWidget {
   final List<User> users;
   final int zoneCount;
   final bool loadedApiData;
-  final VoidCallback? onViewFullMap;
-  final List<MapZoneViewModel> viewZones;
-  final String? selectedZoneId;
-  final String? selectedWorkerId;
-  final ValueChanged<MapZoneViewModel> onSelectZone;
-  final ValueChanged<MapWorkerPlacement> onSelectWorker;
 
   const _CompactEmergencyBody({
     required this.palette,
@@ -309,12 +242,6 @@ class _CompactEmergencyBody extends StatelessWidget {
     required this.users,
     required this.zoneCount,
     required this.loadedApiData,
-    this.onViewFullMap,
-    required this.viewZones,
-    required this.selectedZoneId,
-    required this.selectedWorkerId,
-    required this.onSelectZone,
-    required this.onSelectWorker,
   });
 
   @override
@@ -334,15 +261,7 @@ class _CompactEmergencyBody extends StatelessWidget {
             zoneCount: zoneCount,
           ),
           const SizedBox(height: 14),
-          SizedBox(height: 250, child: _LiveMapCard(
-            palette: palette,
-            onViewFullMap: onViewFullMap,
-            viewZones: viewZones,
-            selectedZoneId: selectedZoneId,
-            selectedWorkerId: selectedWorkerId,
-            onSelectZone: onSelectZone,
-            onSelectWorker: onSelectWorker,
-          )),
+          SizedBox(height: 250, child: _LiveMapCard(palette: palette)),
           const SizedBox(height: 14),
           SizedBox(
             height: 280,
@@ -522,15 +441,13 @@ class _StatsRow extends StatelessWidget {
         final itemWidth =
             (constraints.maxWidth - spacing * (columns - 1)) / columns;
         final activeEvents = events.where(_isEmergencyEvent).length;
-        final onlineDevices = devices
-            .where((device) => device.status.toLowerCase() == 'online')
-            .length;
+        final onlineUnits = devices.where(_isOnlineStatus).length;
         final cards = [
           _StatSpec('Zones', zoneCount.toString(), 'Monitored',
               LucideIcons.mapPin, palette.blue),
           _StatSpec('Events', activeEvents.toString(), 'Last 24 hours',
               LucideIcons.clock, activeEvents > 0 ? palette.red : palette.blue),
-          _StatSpec('Units Deployed', onlineDevices.toString(), 'Online',
+          _StatSpec('Units Deployed', onlineUnits.toString(), 'Online',
               LucideIcons.users, palette.blue),
           _StatSpec('Status', 'ACTIVE', 'All Systems Operational',
               LucideIcons.radio, palette.red),
@@ -562,88 +479,54 @@ class _StatsRow extends StatelessWidget {
 
 class _LiveMapCard extends StatelessWidget {
   final _EmergencyPalette palette;
-  final VoidCallback? onViewFullMap;
-  final List<MapZoneViewModel> viewZones;
-  final String? selectedZoneId;
-  final String? selectedWorkerId;
-  final ValueChanged<MapZoneViewModel> onSelectZone;
-  final ValueChanged<MapWorkerPlacement> onSelectWorker;
 
-  const _LiveMapCard({
-    required this.palette,
-    this.onViewFullMap,
-    required this.viewZones,
-    required this.selectedZoneId,
-    required this.selectedWorkerId,
-    required this.onSelectZone,
-    required this.onSelectWorker,
-  });
+  const _LiveMapCard({required this.palette});
 
   @override
   Widget build(BuildContext context) {
-    if (viewZones.isEmpty) {
-      return _Panel(
-        palette: palette,
-        title: 'Live Situation Map',
-        trailing: GestureDetector(
-          onTap: onViewFullMap,
-          behavior: HitTestBehavior.opaque,
-          child: _MiniButton(palette: palette, label: 'View Full Map'),
-        ),
-        child: const Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
-
-    final selectedZone = viewZones.firstWhere(
-      (z) => z.id == selectedZoneId,
-      orElse: () => viewZones.first,
-    );
-
-    final placements = <MapWorkerPlacement>[];
-    for (var zoneIndex = 0; zoneIndex < viewZones.length; zoneIndex++) {
-      final zone = viewZones[viewZones.indexOf(viewZones[zoneIndex])];
-      final workers = zone.workers;
-      for (var workerIndex = 0; workerIndex < workers.length; workerIndex++) {
-        placements.add(
-          MapWorkerPlacement(
-            zone: zone,
-            worker: workers[workerIndex],
-            zoneIndex: zoneIndex,
-            workerIndex: workerIndex,
-            totalWorkersInZone: workers.length,
-          ),
-        );
-      }
-    }
-
-    final workers = selectedZone.workers;
-
     return _Panel(
       palette: palette,
       title: 'Live Situation Map',
-      trailing: GestureDetector(
-        onTap: onViewFullMap,
-        behavior: HitTestBehavior.opaque,
-        child: _MiniButton(palette: palette, label: 'View Full Map'),
-      ),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: CampusMapMonitor(
-          showDetails: false,
-          palette: CampusMapPalette.fromBrightness(Brightness.dark),
-          zone: selectedZone,
-          zones: viewZones,
-          workers: workers,
-          mapWorkers: placements,
-          deviceCount: 0,
-          registryCount: 0,
-          selectedWorkerId: selectedWorkerId,
-          selectedZoneId: selectedZoneId,
-          onSelectZone: onSelectZone,
-          onSelectWorker: onSelectWorker,
-        ),
+      trailing: _MiniButton(palette: palette, label: 'View Full Map'),
+      child: Stack(
+        children: [
+          Positioned.fill(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: ColorFiltered(
+                colorFilter: ColorFilter.mode(
+                  palette.page.withValues(alpha: 0.28),
+                  BlendMode.srcATop,
+                ),
+                child: Image.asset(
+                  'assets/images/isometric_factory_map.png',
+                  fit: BoxFit.cover,
+                  alignment: Alignment.center,
+                ),
+              ),
+            ),
+          ),
+          Positioned.fill(
+            child: CustomPaint(
+              painter: _SituationMapPainter(palette: palette),
+            ),
+          ),
+          Positioned(
+            left: 14,
+            right: 14,
+            bottom: 10,
+            child: Wrap(
+              spacing: 18,
+              runSpacing: 8,
+              children: [
+                _MapLegendDot('Incident Location', palette.red),
+                _MapLegendDot('Units', palette.blue),
+                _MapLegendDot('Personnel', palette.green),
+                _MapLegendDot('Cameras', palette.gold),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -909,6 +792,16 @@ class _IncidentFeedCard extends StatelessWidget {
   }
 }
 
+bool _isOnlineStatus(DeviceRecord device) {
+  final value = device.status.trim().toLowerCase();
+  return value == 'online' ||
+      value == 'active' ||
+      value == 'available' ||
+      value == 'connected' ||
+      value == 'deployed' ||
+      value == 'ready';
+}
+
 class _PersonnelCard extends StatelessWidget {
   final _EmergencyPalette palette;
   final List<User> users;
@@ -930,20 +823,16 @@ class _PersonnelCard extends StatelessWidget {
       child: Column(
         children: assignedUsers.isEmpty
             ? [
-                _PersonTile(
-                  palette: palette,
-                  initials: 'JL',
-                  name: 'Jessica Lee',
-                  meta: 'Zone 1  -  125 BPM',
-                  color: palette.red,
-                ),
-                Divider(color: palette.line, height: 1),
-                _PersonTile(
-                  palette: palette,
-                  initials: 'MS',
-                  name: 'Michael Smith',
-                  meta: 'Zone 2  -  95 BPM',
-                  color: palette.gold,
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 18),
+                  child: Text(
+                    'No personnel data is available from the backend yet.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: palette.muted,
+                      fontSize: 13,
+                    ),
+                  ),
                 ),
               ]
             : [
@@ -955,7 +844,7 @@ class _PersonnelCard extends StatelessWidget {
                         ? assignedUsers[i].email
                         : assignedUsers[i].name,
                     meta:
-                        '${devices.length} devices visible  -  ${assignedUsers[i].role ?? 'USER'}',
+                        '${devices.length} backend units visible  -  ${assignedUsers[i].role ?? 'USER'}',
                     color: i == 0 ? palette.red : palette.gold,
                   ),
                   if (i != assignedUsers.length - 1)
@@ -1019,9 +908,7 @@ class _SystemStrip extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final networkStatus = loadedApiData ? 'Synced' : 'Fallback';
-    final onlineDevices = devices
-        .where((device) => device.status.toLowerCase() == 'online')
-        .length;
+    final onlineDevices = devices.where(_isOnlineStatus).length;
     final items = [
       (
         'System Status',
@@ -1627,7 +1514,35 @@ class _BannerAction extends StatelessWidget {
   }
 }
 
+class _MapLegendDot extends StatelessWidget {
+  final String label;
+  final Color color;
 
+  const _MapLegendDot(this.label, this.color);
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+        ),
+        const SizedBox(width: 6),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF9DB2D8),
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+      ],
+    );
+  }
+}
 
 // ignore: unused_element
 class _StatusDot extends StatelessWidget {
@@ -1651,7 +1566,121 @@ class _StatusDot extends StatelessWidget {
   }
 }
 
+class _SituationMapPainter extends CustomPainter {
+  final _EmergencyPalette palette;
 
+  const _SituationMapPainter({required this.palette});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final incident = Offset(size.width * 0.57, size.height * 0.54);
+    for (var i = 4; i >= 1; i--) {
+      canvas.drawCircle(
+        incident,
+        i * 18,
+        Paint()
+          ..color = palette.red.withValues(alpha: 0.045)
+          ..style = PaintingStyle.fill,
+      );
+      canvas.drawCircle(
+        incident,
+        i * 18,
+        Paint()
+          ..color = palette.red.withValues(alpha: 0.16)
+          ..style = PaintingStyle.stroke,
+      );
+    }
+    _drawNode(canvas, size, incident, palette.red, Icons.warning_rounded);
+    _drawNode(canvas, size, Offset(size.width * 0.22, size.height * 0.58),
+        palette.green, Icons.directions_bus_rounded);
+    _drawNode(canvas, size, Offset(size.width * 0.74, size.height * 0.42),
+        palette.green, Icons.directions_bus_rounded);
+    _drawNode(canvas, size, Offset(size.width * 0.38, size.height * 0.24),
+        palette.blue, Icons.security_rounded);
+    _drawNode(canvas, size, Offset(size.width * 0.79, size.height * 0.72),
+        palette.gold, Icons.videocam_rounded);
+    _drawPath(
+        canvas,
+        size,
+        [
+          Offset(size.width * 0.12, size.height * 0.37),
+          Offset(size.width * 0.25, size.height * 0.28),
+          Offset(size.width * 0.31, size.height * 0.33),
+        ],
+        palette.redHot);
+    _drawPath(
+        canvas,
+        size,
+        [
+          Offset(size.width * 0.68, size.height * 0.33),
+          Offset(size.width * 0.82, size.height * 0.47),
+          Offset(size.width * 0.91, size.height * 0.40),
+        ],
+        palette.blue);
+  }
+
+  void _drawPath(Canvas canvas, Size size, List<Offset> points, Color color) {
+    final paint = Paint()
+      ..color = color.withValues(alpha: 0.78)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2;
+    final path = Path()..moveTo(points.first.dx, points.first.dy);
+    for (final point in points.skip(1)) {
+      path.lineTo(point.dx, point.dy);
+    }
+    canvas.drawPath(path, paint);
+  }
+
+  void _drawNode(
+    Canvas canvas,
+    Size size,
+    Offset center,
+    Color color,
+    IconData icon,
+  ) {
+    canvas.drawCircle(
+      center,
+      16,
+      Paint()..color = color.withValues(alpha: 0.16),
+    );
+    canvas.drawCircle(
+      center,
+      12,
+      Paint()
+        ..color = palette.card
+        ..style = PaintingStyle.fill,
+    );
+    canvas.drawCircle(
+      center,
+      12,
+      Paint()
+        ..color = color
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2,
+    );
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: String.fromCharCode(icon.codePoint),
+        style: TextStyle(
+          fontFamily: icon.fontFamily,
+          package: icon.fontPackage,
+          color: color,
+          fontSize: 15,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    textPainter.paint(
+      canvas,
+      Offset(center.dx - textPainter.width / 2,
+          center.dy - textPainter.height / 2),
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _SituationMapPainter oldDelegate) =>
+      oldDelegate.palette != palette;
+}
 
 class _HeartbeatPainter extends CustomPainter {
   final Color color;
