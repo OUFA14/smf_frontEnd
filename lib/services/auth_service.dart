@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/user.dart';
 import '../models/auth_session.dart';
 import 'api_service.dart';
+import 'websocket_service.dart';
 
 class AuthService {
   AuthService._();
@@ -145,6 +146,7 @@ class AuthService {
     await prefs.remove(_accessTokenKey);
     await prefs.remove(_refreshTokenKey);
     await prefs.remove(_userIdKey);
+    await WebSocketService.instance.disconnect();
   }
 
   Future<Map<String, String>> authHeaders() async {
@@ -165,10 +167,14 @@ class AuthService {
     final roles = rawRoles is List
         ? rawRoles.map((role) => role.toString()).toList()
         : <String>[];
-    final email = (claims['email'] ?? '').toString();
-    final name =
-        (claims['username'] ?? claims['name'] ?? email.split('@').first)
-            .toString();
+    final email = (claims['email'] ?? claims['emailAddress'] ?? '').toString();
+    final name = (claims['displayName'] ??
+            claims['fullName'] ??
+            claims['full_name'] ??
+            claims['username'] ??
+            claims['name'] ??
+            email.split('@').first)
+        .toString();
 
     return User(
       id: (claims['sub'] ?? claims['id'] ?? _userId ?? '').toString(),
@@ -211,5 +217,6 @@ class AuthService {
     await prefs.setString(_accessTokenKey, session.accessToken);
     await prefs.setString(_refreshTokenKey, session.refreshToken);
     await prefs.setString(_userIdKey, session.userId);
+    await WebSocketService.instance.connect();
   }
 }
