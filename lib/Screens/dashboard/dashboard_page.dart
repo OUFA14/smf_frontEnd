@@ -13,6 +13,7 @@ import '../../providers/language_provider.dart';
 import '../../services/events_service.dart';
 import '../../services/smf_devices_service.dart';
 import '../../services/users_service.dart';
+import '../../services/websocket_service.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/dashboard_history.dart';
 import '../announcements/announcements_page.dart';
@@ -51,6 +52,7 @@ class _DashboardPageState extends State<DashboardPage>
   late final AnimationController _livePulse;
   late final AnimationController _badgePulse;
   StreamSubscription<String>? _dashboardHistorySubscription;
+  StreamSubscription? _notificationSubscription;
   final List<_DashboardTab> _dashboardTabHistory = <_DashboardTab>[];
   final Set<int> _readNotificationIndexes = <int>{};
   final UsersService _usersService = UsersService();
@@ -62,6 +64,7 @@ class _DashboardPageState extends State<DashboardPage>
   int? _smfDeviceCount;
   int? _registeredSmfDeviceCount;
   int _selectedAlertIndex = 0;
+  int _unreadNotificationCount = 0;
   int _alertsCurrentPage = 1;
   String _alertSearchQuery = '';
   String _alertSeverityFilter = 'All';
@@ -88,6 +91,12 @@ class _DashboardPageState extends State<DashboardPage>
     _loadCurrentUser();
     _loadProfileImage();
     _loadAlertsFromEvents();
+    _unreadNotificationCount = WebSocketService.instance.unreadCount;
+    _notificationSubscription =
+        WebSocketService.instance.stream.listen((_) {
+      if (!mounted) return;
+      setState(() => _unreadNotificationCount = WebSocketService.instance.unreadCount);
+    });
     _loadOnlineUserCount();
     _loadSmfDeviceCount();
   }
@@ -223,6 +232,7 @@ class _DashboardPageState extends State<DashboardPage>
   @override
   void dispose() {
     _dashboardHistorySubscription?.cancel();
+    _notificationSubscription?.cancel();
     _livePulse.dispose();
     _badgePulse.dispose();
     super.dispose();
@@ -1212,9 +1222,7 @@ class _DashboardPageState extends State<DashboardPage>
         return _pageShell(
           title: languageProvider.getText('emergencyDashboard'),
           subtitle: languageProvider.getText('emergencySubtitleDashboard'),
-          child: EmergencyDashboardPage(
-            onViewFullMap: () => _selectDashboardTab(_DashboardTab.map),
-          ),
+          child: const EmergencyDashboardPage(),
           palette: palette,
         );
       case _DashboardTab.users:
@@ -1478,9 +1486,34 @@ class _DashboardPageState extends State<DashboardPage>
                             _heroPill(
                               palette: palette,
                               onTap: () => _showNotificationsPanel(palette),
-                              child: Icon(
-                                Icons.notifications_none_rounded,
-                                color: palette.heroText,
+                              child: Stack(
+                                clipBehavior: Clip.none,
+                                children: [
+                                  Icon(
+                                    Icons.notifications_none_rounded,
+                                    color: palette.heroText,
+                                  ),
+                                  if (_unreadNotificationCount > 0)
+                                    Positioned(
+                                      top: -4,
+                                      right: -6,
+                                      child: Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: palette.danger,
+                                          borderRadius: BorderRadius.circular(999),
+                                        ),
+                                        child: Text(
+                                          '$_unreadNotificationCount',
+                                          style: const TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w800,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                ],
                               ),
                             ),
                           ],
@@ -1692,10 +1725,8 @@ class _DashboardPageState extends State<DashboardPage>
           builder: (context, scrollController) {
             return StatefulBuilder(
               builder: (context, setPanelState) {
-                const notifications = <_AlertRecord>[];
-                final unreadCount =
-                    (notifications.length - _readNotificationIndexes.length)
-                        .clamp(0, notifications.length);
+                final notifications = WebSocketService.instance.notifications;
+                final unreadCount = WebSocketService.instance.unreadCount;
 
                 return Container(
                   margin: const EdgeInsets.all(14),
@@ -1841,123 +1872,97 @@ class _DashboardPageState extends State<DashboardPage>
                                     const SizedBox(height: 12),
                                 itemBuilder: (context, index) {
                                   final alert = notifications[index];
-                                  final read =
-                                      _readNotificationIndexes.contains(index);
-                                  final accent = alert.severity == 'High'
+                                  final read = _readNotificationIndexes.contains(index);
+                                  final accent = alert.type == 'SOS_ALERT'
                                       ? palette.danger
-                                      : alert.severity == 'Medium'
+                                      : alert.type == 'UNAUTHORIZED_ACCESS'
                                           ? palette.warning
-                                          : palette.success;
+                                          : alert.type == 'DEVICE_OFFLINE'
+                                              ? palette.warning
+                                              : palette.success;
 
-                                  return GestureDetector(
-                                    onTap: () {
-                                      setState(() {
-                                        _readNotificationIndexes.add(index);
-                                        _selectedAlertIndex = index;
-                                      });
-                                      _selectDashboardTab(_DashboardTab.alerts);
-                                      Navigator.pop(context);
-                                    },
-                                    child: AnimatedContainer(
-                                      duration:
-                                          const Duration(milliseconds: 180),
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
+                                  return AnimatedContainer(
+                                    duration: const Duration(milliseconds: 180),
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      color: read
+                                          ? palette.innerCardBackground
+                                          : accent.withValues(alpha: 0.10),
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(
                                         color: read
-                                            ? palette.innerCardBackground
-                                            : accent.withValues(alpha: 0.10),
-                                        borderRadius: BorderRadius.circular(18),
-                                        border: Border.all(
-                                          color: read
-                                              ? palette.innerCardBorder
-                                              : accent.withValues(alpha: 0.35),
+                                            ? palette.innerCardBorder
+                                            : accent.withValues(alpha: 0.35),
+                                      ),
+                                    ),
+                                    child: Row(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Container(
+                                          width: 42,
+                                          height: 42,
+                                          decoration: BoxDecoration(
+                                            shape: BoxShape.circle,
+                                            color: accent.withValues(alpha: 0.16),
+                                          ),
+                                          child: Icon(Icons.campaign_rounded, color: accent),
                                         ),
-                                      ),
-                                      child: Row(
-                                        crossAxisAlignment:
-                                            CrossAxisAlignment.start,
-                                        children: [
-                                          Container(
-                                            width: 42,
-                                            height: 42,
-                                            decoration: BoxDecoration(
-                                              shape: BoxShape.circle,
-                                              color: accent.withValues(
-                                                  alpha: 0.16),
-                                            ),
-                                            child: Icon(
-                                              Icons.campaign_rounded,
-                                              color: accent,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 14),
-                                          Expanded(
-                                            child: Column(
-                                              crossAxisAlignment:
-                                                  CrossAxisAlignment.start,
-                                              children: [
-                                                Row(
-                                                  children: [
-                                                    Expanded(
-                                                      child: Text(
-                                                        alert.title,
-                                                        style: TextStyle(
-                                                          color: palette
-                                                              .textPrimary,
-                                                          fontWeight:
-                                                              FontWeight.w800,
-                                                        ),
+                                        const SizedBox(width: 14),
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      alert.type.replaceAll('_', ' '),
+                                                      style: TextStyle(
+                                                        color: palette.textPrimary,
+                                                        fontWeight: FontWeight.w800,
                                                       ),
                                                     ),
-                                                    if (!read)
-                                                      Container(
-                                                        width: 9,
-                                                        height: 9,
-                                                        decoration:
-                                                            BoxDecoration(
-                                                          color: accent,
-                                                          shape:
-                                                              BoxShape.circle,
-                                                        ),
-                                                      ),
-                                                  ],
-                                                ),
-                                                const SizedBox(height: 6),
-                                                Text(
-                                                  alert.description,
-                                                  style: TextStyle(
-                                                    color: palette.textMuted,
-                                                    height: 1.35,
                                                   ),
+                                                  if (!read)
+                                                    Container(
+                                                      width: 9,
+                                                      height: 9,
+                                                      decoration: BoxDecoration(
+                                                        color: accent,
+                                                        shape: BoxShape.circle,
+                                                      ),
+                                                    ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 6),
+                                              Text(
+                                                alert.message,
+                                                style: TextStyle(
+                                                  color: palette.textMuted,
+                                                  height: 1.35,
                                                 ),
-                                                const SizedBox(height: 10),
-                                                Wrap(
-                                                  spacing: 8,
-                                                  runSpacing: 8,
-                                                  children: [
-                                                    _notificationChip(
-                                                      label: alert.severity,
-                                                      color: accent,
-                                                      palette: palette,
-                                                    ),
-                                                    _notificationChip(
-                                                      label: alert.status,
-                                                      color:
-                                                          palette.primaryBlue2,
-                                                      palette: palette,
-                                                    ),
-                                                    _notificationChip(
-                                                      label: alert.timeLabel,
-                                                      color: palette.textMuted,
-                                                      palette: palette,
-                                                    ),
-                                                  ],
-                                                ),
-                                              ],
-                                            ),
+                                              ),
+                                              const SizedBox(height: 10),
+                                              Wrap(
+                                                spacing: 8,
+                                                runSpacing: 8,
+                                                children: [
+                                                  _notificationChip(
+                                                    label: alert.macAddress.isEmpty ? 'Device' : alert.macAddress,
+                                                    color: accent,
+                                                    palette: palette,
+                                                  ),
+                                                  _notificationChip(
+                                                    label: alert.timestamp.toLocal().toString(),
+                                                    color: palette.primaryBlue2,
+                                                    palette: palette,
+                                                  ),
+                                                ],
+                                              ),
+                                            ],
                                           ),
-                                        ],
-                                      ),
+                                        ),
+                                      ],
                                     ),
                                   );
                                 },
